@@ -17,6 +17,8 @@ class LlmScreen extends StatefulWidget {
 
 class _LlmScreenState extends State<LlmScreen> {
   final TextEditingController controller = TextEditingController();
+  String? chatSessionId;
+  bool isSending = false;
 
   final List<ChatMessage> messages = [
     ChatMessage(
@@ -27,12 +29,21 @@ class _LlmScreenState extends State<LlmScreen> {
     ),
   ];
 
+  @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
+  }
+
   Future<void> sendMessage() async {
+    if (isSending) return;
+
     final text = controller.text.trim();
 
     if (text.isEmpty) return;
 
     setState(() {
+      isSending = true;
       messages.add(ChatMessage(
         id: DateTime.now().millisecondsSinceEpoch.toString(),
         text: text,
@@ -42,22 +53,44 @@ class _LlmScreenState extends State<LlmScreen> {
       controller.clear();
     });
 
-    final ingredients = await IngredientService.getIngredients();
-    final response = await ChatService.sendMessage(text);
-
-    if (!mounted) return;
-
-    setState(() {
-      messages.add(
-        ChatMessage(
-          id: DateTime.now().millisecondsSinceEpoch.toString(),
-          text:
-          '${response.text}\n\n현재 보유 식재료: ${ingredients.map((e) => e.name).join(', ')}',
-          role: MessageRole.assistant,
-          createdAt: DateTime.now(),
-        ),
+    try {
+      final ingredients = await IngredientService.getIngredients();
+      final response = await ChatService.sendChatMessage(
+        message: text,
+        sessionId: chatSessionId,
       );
-    });
+
+      if (!mounted) return;
+
+      setState(() {
+        chatSessionId =
+            response.sessionId.isEmpty ? chatSessionId : response.sessionId;
+        isSending = false;
+        messages.add(
+          ChatMessage(
+            id: DateTime.now().millisecondsSinceEpoch.toString(),
+            text:
+                '${response.reply}\n\n현재 보유 식재료: ${ingredients.map((e) => e.name).join(', ')}',
+            role: MessageRole.assistant,
+            createdAt: DateTime.now(),
+          ),
+        );
+      });
+    } catch (_) {
+      if (!mounted) return;
+
+      setState(() {
+        isSending = false;
+        messages.add(
+          ChatMessage(
+            id: DateTime.now().millisecondsSinceEpoch.toString(),
+            text: 'chat 셰프 응답을 불러오지 못했습니다. 잠시 후 다시 시도해주세요.',
+            role: MessageRole.assistant,
+            createdAt: DateTime.now(),
+          ),
+        );
+      });
+    }
   }
 
   Widget bubble(ChatMessage message) {
@@ -242,10 +275,20 @@ class _LlmScreenState extends State<LlmScreen> {
                   ),
                   const SizedBox(width: 8),
                   GestureDetector(
-                    onTap: sendMessage,
-                    child: const CircleAvatar(
-                      backgroundColor: AppColors.mainGreen,
-                      child: Icon(Icons.send, color: Colors.white),
+                    onTap: isSending ? null : sendMessage,
+                    child: CircleAvatar(
+                      backgroundColor:
+                          isSending ? Colors.grey : AppColors.mainGreen,
+                      child: isSending
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Icon(Icons.send, color: Colors.white),
                     ),
                   ),
                 ],
