@@ -1,11 +1,32 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../models/chat_message.dart';
 import '../repositories/chat_repository.dart';
 
+class ChatReply {
+  final String sessionId;
+  final String reply;
+  final bool isFallback;
+
+  const ChatReply({
+    required this.sessionId,
+    required this.reply,
+    this.isFallback = false,
+  });
+}
+
 /// 채팅 처리 서비스
 class ChatService {
   ChatService._();
+
+  static const String _baseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'http://10.0.2.2:8000',
+  );
+  static const String _devToken = 'dev-token';
 
   /// 새 채팅 시작
   static Future<ChatSession> startSession({
@@ -79,13 +100,75 @@ class ChatService {
         .deleteSession(uid: uid, sessionId: sessionId);
   }
 
-  /// 임시 응답
-  @Deprecated('FastAPI /chat 연결 후 ApiClient.postChat()으로 교체 예정')
+  /// chat API 호출
+  static Future<ChatReply> sendChatMessage({
+    required String message,
+    String? sessionId,
+    String? recipeId,
+  }) async {
+    try {
+      final response = await _postChat(
+        message: message,
+        sessionId: sessionId,
+        recipeId: recipeId,
+      );
+      return response;
+    } catch (_) {
+      await Future.delayed(const Duration(milliseconds: 300));
+      return ChatReply(
+        sessionId: sessionId ?? 'local-${DateTime.now().millisecondsSinceEpoch}',
+        reply: 'chat 셰프가 아직 준비 중입니다. 백엔드 연결 후 실제 답변이 표시됩니다.',
+        isFallback: true,
+      );
+    }
+  }
+
+  static Future<ChatReply> _postChat({
+    required String message,
+    String? sessionId,
+    String? recipeId,
+  }) async {
+    final client = HttpClient();
+    client.connectionTimeout = const Duration(seconds: 8);
+
+    try {
+      final request = await client.postUrl(Uri.parse('$_baseUrl/chat'));
+      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $_devToken');
+      request.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
+      request.write(jsonEncode({
+        'message': message,
+        if (sessionId != null) 'sessionId': sessionId,
+        if (recipeId != null) 'recipeId': recipeId,
+      }));
+
+      final response = await request.close();
+      final responseBody = await response.transform(utf8.decoder).join();
+
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw HttpException(responseBody);
+      }
+
+      final decoded = jsonDecode(responseBody) as Map<String, dynamic>;
+      final nextSessionId =
+          decoded['sessionId'] as String? ?? decoded['session_id'] as String?;
+      final reply = decoded['reply'] as String? ?? '';
+
+      return ChatReply(
+        sessionId: nextSessionId ?? sessionId ?? '',
+        reply: reply.isEmpty ? '응답 내용이 없습니다.' : reply,
+      );
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  @Deprecated('sendChatMessage를 사용하세요.')
   static Future<ChatMessage> sendMessage(String message) async {
+    final response = await sendChatMessage(message: message);
     await Future.delayed(const Duration(milliseconds: 300));
     return ChatMessage(
       id: 'tmp',
-      text: 'AI 응답이 곧 연결됩니다. 메시지: $message',
+      text: response.reply,
       role: MessageRole.assistant,
       createdAt: DateTime.now(),
     );
