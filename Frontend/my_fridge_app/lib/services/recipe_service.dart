@@ -167,7 +167,8 @@ class RecipeService {
     Map<String, dynamic>? body,
   }) async {
     final client = HttpClient();
-    client.connectionTimeout = const Duration(seconds: 5);
+    // Render 콜드스타트 대비
+    client.connectionTimeout = const Duration(seconds: 60);
 
     try {
       final token = await _idToken();
@@ -176,10 +177,12 @@ class RecipeService {
       }
       final request = await client.openUrl(method, Uri.parse('$_baseUrl$path'));
       request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
-      request.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
+      request.headers.contentType =
+          ContentType('application', 'json', charset: 'utf-8');
 
       if (body != null) {
-        request.write(jsonEncode(body));
+        // HttpClient.write는 기본 latin1 — 한글 깨짐. UTF-8 바이트로 직접 add.
+        request.add(utf8.encode(jsonEncode(body)));
       }
 
       final response = await request.close();

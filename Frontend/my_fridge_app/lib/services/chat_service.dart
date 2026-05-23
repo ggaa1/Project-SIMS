@@ -111,13 +111,17 @@ class ChatService {
     String? recipeId,
   }) async {
     try {
+      print('[chat] POST $_baseUrl/chat msg="${message.substring(0, message.length.clamp(0, 30))}..."');
       final response = await _postChat(
         message: message,
         sessionId: sessionId,
         recipeId: recipeId,
       );
+      print('[chat] reply OK (session=${response.sessionId})');
       return response;
-    } catch (_) {
+    } catch (e, st) {
+      print('[chat] ERROR: $e');
+      print('[chat] stack: $st');
       await Future.delayed(const Duration(milliseconds: 300));
       return ChatReply(
         sessionId: sessionId ?? 'local-${DateTime.now().millisecondsSinceEpoch}',
@@ -133,7 +137,8 @@ class ChatService {
     String? recipeId,
   }) async {
     final client = HttpClient();
-    client.connectionTimeout = const Duration(seconds: 8);
+    // Render 콜드스타트 대비 + emulator 환경의 첫 TLS 핸드셰이크 여유
+    client.connectionTimeout = const Duration(seconds: 60);
 
     try {
       final token = await _idToken();
@@ -142,18 +147,22 @@ class ChatService {
       }
       final request = await client.postUrl(Uri.parse('$_baseUrl/chat'));
       request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
-      request.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
-      request.write(jsonEncode({
+      request.headers.contentType =
+          ContentType('application', 'json', charset: 'utf-8');
+      // HttpClient.write는 기본 latin1 — 한글 깨짐. UTF-8 바이트로 직접 add.
+      request.add(utf8.encode(jsonEncode({
         'message': message,
         if (sessionId != null) 'sessionId': sessionId,
         if (recipeId != null) 'recipeId': recipeId,
-      }));
+      })));
 
       final response = await request.close();
       final responseBody = await response.transform(utf8.decoder).join();
 
+      print('[chat] HTTP ${response.statusCode} body=${responseBody.substring(0, responseBody.length.clamp(0, 200))}');
+
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw HttpException(responseBody);
+        throw HttpException('HTTP ${response.statusCode}: $responseBody');
       }
 
       final decoded = jsonDecode(responseBody) as Map<String, dynamic>;
