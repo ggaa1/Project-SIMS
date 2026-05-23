@@ -26,7 +26,11 @@ class ChatService {
     'API_BASE_URL',
     defaultValue: 'http://10.0.2.2:8000',
   );
-  static const String _devToken = 'dev-token';
+
+  /// 현재 로그인 사용자의 Firebase ID 토큰. 매 요청마다 새로 받아 만료 자동 처리.
+  static Future<String?> _idToken() async {
+    return FirebaseAuth.instance.currentUser?.getIdToken();
+  }
 
   /// 새 채팅 시작
   static Future<ChatSession> startSession({
@@ -132,8 +136,12 @@ class ChatService {
     client.connectionTimeout = const Duration(seconds: 8);
 
     try {
+      final token = await _idToken();
+      if (token == null) {
+        throw StateError('Firebase 로그인 토큰을 가져오지 못했습니다.');
+      }
       final request = await client.postUrl(Uri.parse('$_baseUrl/chat'));
-      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $_devToken');
+      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
       request.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
       request.write(jsonEncode({
         'message': message,
