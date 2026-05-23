@@ -1,0 +1,12 @@
+# 컨테이너에 안 들어가도 되는 파일
+samples/
+localocr/
+__pycache__/
+*.pyc
+*.pyo
+.env
+.env.*
+Dockerfile
+.dockerignore
+API.md
+send_sample.py

@@ -26,3 +26,19 @@ services:
         sync: false                 # 챗봇/레시피 추천용 (대시보드에서 직접 입력)
       - key: CRON_SECRET
         sync: false                 # /tasks/check-expiry 보호 (대시보드에서 직접 입력)
+
+  # OCR 서비스 (Gemini Vision 기반). server 와 분리되어 있어 별도 컨테이너로 배포.
+  - type: web
+    name: naengbu-ocr
+    runtime: docker
+    plan: free
+    region: singapore
+    rootDir: Backend/ocr
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false                 # Google AI Studio 키 (대시보드에서 직접 입력)
+      - key: GEMINI_MODEL
+        value: gemini-3.1-flash-lite
