@@ -19,6 +19,7 @@ from app.routers import (
     tasks,
     users,
 )
+from app.ocr.router import router as ocr_router
 
 
 app = FastAPI(
@@ -53,3 +54,4 @@ app.include_router(recipes.router)
 app.include_router(chat.router)
 app.include_router(fcm.router)
 app.include_router(tasks.router)
+app.include_router(ocr_router)
