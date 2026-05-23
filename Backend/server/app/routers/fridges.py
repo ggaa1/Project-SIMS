@@ -1,5 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+import secrets
+from typing import Any, Dict, List, Optional
 
+from fastapi import APIRouter, Depends, HTTPException, status
+from google.cloud.firestore_v1 import ArrayUnion
+
+from app import db
 from app.auth import CurrentUser, get_current_user
 from app.schemas.fridges import (
     Fridge,
@@ -11,10 +16,61 @@ from app.schemas.fridges import (
 
 router = APIRouter(prefix="/fridges", tags=["fridges"])
 
-_NOT_IMPL = HTTPException(
-    status_code=status.HTTP_501_NOT_IMPLEMENTED,
-    detail="Not implemented yet (Week 2)",
-)
+
+# Frontend fridge_repository.dart 와 동일한 알파벳 (I, O, 0, 1 제외).
+_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+def _generate_invite_code(length: int = 6) -> str:
+    return "".join(secrets.choice(_CODE_ALPHABET) for _ in range(length))
+
+
+def _unique_invite_code() -> str:
+    """다른 fridge와 겹치지 않는 invite code를 발급."""
+    for _ in range(5):
+        code = _generate_invite_code(6)
+        existing = (
+            db.fridges_col()
+            .where(filter=_eq_filter("inviteCode", code))
+            .limit(1)
+            .get()
+        )
+        if not existing:
+            return code
+    # 정말 운 없는 경우 한 자 더
+    return _generate_invite_code(7)
+
+
+def _eq_filter(field: str, value: Any):
+    # google-cloud-firestore의 FieldFilter (>=2.16). 구버전 호환 위해 폴백.
+    try:
+        from google.cloud.firestore_v1.base_query import FieldFilter
+        return FieldFilter(field, "==", value)
+    except ImportError:  # pragma: no cover
+        return (field, "==", value)
+
+
+def _fridge_from_snapshot(snap) -> Fridge:
+    """Firestore 문서 → Fridge. inviteCode 없으면 생성해서 doc에 업데이트."""
+    data: Dict[str, Any] = snap.to_dict() or {}
+    invite_code = data.get("inviteCode")
+    if not invite_code:
+        invite_code = _unique_invite_code()
+        snap.reference.update({
+            "inviteCode": invite_code,
+            "updatedAt": db.utcnow(),
+        })
+        data["inviteCode"] = invite_code
+
+    return Fridge(
+        id=snap.id,
+        name=data.get("name") or "내 냉장고",
+        owner_uid=data.get("ownerUid") or "",
+        member_uids=list(data.get("memberUids") or []),
+        invite_code=invite_code,
+        created_at=data.get("createdAt") or db.utcnow(),
+        updated_at=data.get("updatedAt") or db.utcnow(),
+    )
 
 
 @router.post(
@@ -26,8 +82,47 @@ _NOT_IMPL = HTTPException(
 def create_fridge(
     body: FridgeCreate,
     user: CurrentUser = Depends(get_current_user),
-):
-    raise _NOT_IMPL
+) -> Fridge:
+    now = db.utcnow()
+    ref = db.fridges_col().document()
+    invite_code = _unique_invite_code()
+
+    payload: Dict[str, Any] = {
+        "name": body.name,
+        "ownerUid": user.uid,
+        "memberUids": [user.uid],
+        "inviteCode": invite_code,
+        "createdAt": now,
+        "updatedAt": now,
+    }
+    ref.set(payload)
+
+    # 사용자 문서에 fridgeIds 추가 (없으면 생성)
+    user_ref = db.users_col().document(user.uid)
+    user_snap = user_ref.get()
+    if user_snap.exists:
+        user_ref.update({
+            "fridgeIds": ArrayUnion([ref.id]),
+            "updatedAt": now,
+        })
+    else:
+        user_ref.set({
+            "email": user.email or "",
+            "displayName": user.name,
+            "fridgeIds": [ref.id],
+            "createdAt": now,
+            "updatedAt": now,
+        })
+
+    return Fridge(
+        id=ref.id,
+        name=body.name,
+        owner_uid=user.uid,
+        member_uids=[user.uid],
+        invite_code=invite_code,
+        created_at=now,
+        updated_at=now,
+    )
 
 
 @router.get(
@@ -37,8 +132,20 @@ def create_fridge(
 )
 def list_my_fridges(
     user: CurrentUser = Depends(get_current_user),
-):
-    raise _NOT_IMPL
+) -> FridgeListResponse:
+    user_snap = db.users_col().document(user.uid).get()
+    fridge_ids: List[str] = []
+    if user_snap.exists:
+        fridge_ids = list((user_snap.to_dict() or {}).get("fridgeIds") or [])
+
+    fridges: List[Fridge] = []
+    for fid in fridge_ids:
+        snap = db.fridges_col().document(fid).get()
+        if not snap.exists:
+            continue
+        fridges.append(_fridge_from_snapshot(snap))
+
+    return FridgeListResponse(fridges=fridges)
 
 
 @router.post(
@@ -49,5 +156,56 @@ def list_my_fridges(
 def join_fridge(
     body: FridgeJoinRequest,
     user: CurrentUser = Depends(get_current_user),
-):
-    raise _NOT_IMPL
+) -> FridgeJoinResponse:
+    code = body.invite_code.strip().upper()
+    query = (
+        db.fridges_col()
+        .where(filter=_eq_filter("inviteCode", code))
+        .limit(1)
+        .get()
+    )
+    if not query:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="해당 초대 코드의 냉장고를 찾을 수 없습니다.",
+        )
+
+    snap = query[0]
+    data = snap.to_dict() or {}
+    member_uids: List[str] = list(data.get("memberUids") or [])
+    now = db.utcnow()
+
+    if user.uid not in member_uids:
+        snap.reference.update({
+            "memberUids": ArrayUnion([user.uid]),
+            "updatedAt": now,
+        })
+        member_uids.append(user.uid)
+
+    # 사용자 문서에도 fridgeId 추가
+    user_ref = db.users_col().document(user.uid)
+    user_snap = user_ref.get()
+    if user_snap.exists:
+        user_ref.update({
+            "fridgeIds": ArrayUnion([snap.id]),
+            "updatedAt": now,
+        })
+    else:
+        user_ref.set({
+            "email": user.email or "",
+            "displayName": user.name,
+            "fridgeIds": [snap.id],
+            "createdAt": now,
+            "updatedAt": now,
+        })
+
+    fridge = Fridge(
+        id=snap.id,
+        name=data.get("name") or "내 냉장고",
+        owner_uid=data.get("ownerUid") or "",
+        member_uids=member_uids,
+        invite_code=code,
+        created_at=data.get("createdAt") or now,
+        updated_at=now,
+    )
+    return FridgeJoinResponse(fridge=fridge, joined_as=user.uid)

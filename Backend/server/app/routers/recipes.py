@@ -1,18 +1,20 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Any, Dict, List
 
+from fastapi import APIRouter, Depends
+from google.cloud.firestore_v1 import Query
+
+from app import db
 from app.auth import CurrentUser, get_current_user
 from app.schemas.recipes import (
+    RecipeHistoryItem,
     RecipeHistoryResponse,
     RecipeRecommendRequest,
     RecipeRecommendResponse,
+    RecipeSource,
 )
+from app.services import llm_service
 
 router = APIRouter(prefix="/recipes", tags=["recipes"])
-
-_NOT_IMPL = HTTPException(
-    status_code=status.HTTP_501_NOT_IMPLEMENTED,
-    detail="Not implemented yet (Week 2)",
-)
 
 
 @router.post(
@@ -23,8 +25,8 @@ _NOT_IMPL = HTTPException(
 def recommend_recipes(
     body: RecipeRecommendRequest,
     user: CurrentUser = Depends(get_current_user),
-):
-    raise _NOT_IMPL
+) -> RecipeRecommendResponse:
+    return llm_service.generate_recipe_recommendation(body)
 
 
 @router.get(
@@ -34,5 +36,34 @@ def recommend_recipes(
 )
 def list_recipe_history(
     user: CurrentUser = Depends(get_current_user),
-):
-    raise _NOT_IMPL
+) -> RecipeHistoryResponse:
+    docs = (
+        db.recipe_history_col(user.uid)
+        .order_by("viewedAt", direction=Query.DESCENDING)
+        .limit(50)
+        .stream()
+    )
+
+    items: List[RecipeHistoryItem] = []
+    for d in docs:
+        data: Dict[str, Any] = d.to_dict() or {}
+        source_raw = data.get("source") or RecipeSource.LLM.value
+        try:
+            source = RecipeSource(source_raw)
+        except ValueError:
+            source = RecipeSource.LLM
+
+        items.append(
+            RecipeHistoryItem(
+                id=d.id,
+                title=data.get("title") or "",
+                time=data.get("time") or "",
+                description=data.get("description") or "",
+                owned_ingredients=list(data.get("ownedIngredients") or []),
+                missing_ingredients=list(data.get("missingIngredients") or []),
+                steps=list(data.get("steps") or []),
+                source=source,
+                viewed_at=data.get("viewedAt") or db.utcnow(),
+            )
+        )
+    return RecipeHistoryResponse(items=items)

@@ -1,14 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 
+from app import db
 from app.auth import CurrentUser, get_current_user
 from app.schemas.fcm import FCMRegisterRequest, FCMRegisterResponse
 
 router = APIRouter(prefix="/fcm", tags=["fcm"])
-
-_NOT_IMPL = HTTPException(
-    status_code=status.HTTP_501_NOT_IMPLEMENTED,
-    detail="Not implemented yet (Week 3)",
-)
 
 
 @router.post(
@@ -19,5 +15,10 @@ _NOT_IMPL = HTTPException(
 def register_device(
     body: FCMRegisterRequest,
     user: CurrentUser = Depends(get_current_user),
-):
-    raise _NOT_IMPL
+) -> FCMRegisterResponse:
+    db.fcm_devices_col(user.uid).document(body.device_id).set({
+        "token": body.token,
+        "platform": body.platform.value,
+        "lastSeenAt": db.utcnow(),
+    }, merge=True)
+    return FCMRegisterResponse(ok=True)

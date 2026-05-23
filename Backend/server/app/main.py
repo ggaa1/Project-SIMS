@@ -1,5 +1,10 @@
 import os
 
+from dotenv import load_dotenv
+
+# routers import 전에 .env 로드 (auth.py / llm_service.py가 import 시점에 환경변수를 읽음)
+load_dotenv()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 

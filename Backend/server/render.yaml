@@ -22,6 +22,7 @@ services:
         value: /etc/secrets/service-account.json
       - key: CORS_ORIGINS
         sync: false                 # 대시보드에서 직접 입력
-      # OpenAI / Vision API 키는 Week 2~3에서 추가
-      # - key: OPENAI_API_KEY
-      #   sync: false
+      - key: OPENAI_API_KEY
+        sync: false                 # 챗봇/레시피 추천용 (대시보드에서 직접 입력)
+      - key: CRON_SECRET
+        sync: false                 # /tasks/check-expiry 보호 (대시보드에서 직접 입력)

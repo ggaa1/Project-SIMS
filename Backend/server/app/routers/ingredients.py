@@ -1,11 +1,8 @@
-import json
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import List
-from uuid import uuid4
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from app import db
 from app.auth import CurrentUser, get_current_user
 from app.schemas.ingredients import (
     ImageIngestRequest,
@@ -18,38 +15,45 @@ from app.schemas.ingredients import (
 
 router = APIRouter(tags=["ingredients"])
 
-_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
-_DATA_FILE = _DATA_DIR / "ingredients.json"
-
 _NOT_IMPL = HTTPException(
     status_code=status.HTTP_501_NOT_IMPLEMENTED,
-    detail="Not implemented yet (Week 2)",
+    detail="OCR 통합 미구현 (별도 OCR 서비스 호출 예정)",
 )
 
 
-def _load_ingredients() -> List[Ingredient]:
-    if not _DATA_FILE.exists():
-        return []
-
-    with _DATA_FILE.open("r", encoding="utf-8") as f:
-        raw_items = json.load(f)
-
-    return [Ingredient(**item) for item in raw_items]
-
-
-def _save_ingredients(items: List[Ingredient]) -> None:
-    _DATA_DIR.mkdir(parents=True, exist_ok=True)
-    payload = [
-        item.model_dump(mode="json", by_alias=True)
-        for item in items
-    ]
-
-    with _DATA_FILE.open("w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
+def _verify_member(fridge_id: str, uid: str) -> Dict[str, Any]:
+    """fridge 존재 + 사용자가 member 인지 확인. 통과하면 fridge dict 반환."""
+    snap = db.fridges_col().document(fridge_id).get()
+    if not snap.exists:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Fridge not found",
+        )
+    data = snap.to_dict() or {}
+    if uid not in (data.get("memberUids") or []):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="이 냉장고의 멤버가 아닙니다.",
+        )
+    return data
 
 
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
+def _ingredient_from_snapshot(snap, fridge_id: str) -> Ingredient:
+    data: Dict[str, Any] = snap.to_dict() or {}
+    return Ingredient(
+        id=snap.id,
+        fridge_id=fridge_id,
+        name=data.get("name") or "",
+        category=data.get("category") or "기타",
+        emoji=data.get("emoji"),
+        count=int(data.get("count") or 1),
+        expire_date=data.get("expireDate") or db.utcnow(),
+        image_url=data.get("imageURL"),
+        added_by=data.get("addedBy") or "",
+        added_via=data.get("addedVia") or "manual",
+        created_at=data.get("createdAt") or db.utcnow(),
+        updated_at=data.get("updatedAt") or db.utcnow(),
+    )
 
 
 @router.get(
@@ -60,14 +64,15 @@ def _now() -> datetime:
 def list_ingredients(
     fridge_id: str,
     user: CurrentUser = Depends(get_current_user),
-):
-    items = [
-        item
-        for item in _load_ingredients()
-        if item.fridge_id == fridge_id and item.added_by == user.uid
-    ]
+) -> List[Ingredient]:
+    _verify_member(fridge_id, user.uid)
 
-    return sorted(items, key=lambda item: item.expire_date)
+    docs = (
+        db.ingredients_col(fridge_id)
+        .order_by("expireDate")
+        .stream()
+    )
+    return [_ingredient_from_snapshot(d, fridge_id) for d in docs]
 
 
 @router.post(
@@ -80,23 +85,41 @@ def create_ingredient(
     fridge_id: str,
     body: IngredientCreate,
     user: CurrentUser = Depends(get_current_user),
-):
-    items = _load_ingredients()
-    now = _now()
-    ingredient = Ingredient(
-        id=str(uuid4()),
+) -> Ingredient:
+    _verify_member(fridge_id, user.uid)
+
+    now = db.utcnow()
+    ref = db.ingredients_col(fridge_id).document()
+    payload: Dict[str, Any] = {
+        "name": body.name,
+        "category": body.category.value,
+        "count": body.count,
+        "expireDate": body.expire_date,
+        "addedBy": user.uid,
+        "addedVia": body.added_via.value,
+        "createdAt": now,
+        "updatedAt": now,
+    }
+    if body.emoji is not None:
+        payload["emoji"] = body.emoji
+    if body.image_url is not None:
+        payload["imageURL"] = body.image_url
+    ref.set(payload)
+
+    return Ingredient(
+        id=ref.id,
         fridge_id=fridge_id,
+        name=body.name,
+        category=body.category,
+        emoji=body.emoji,
+        count=body.count,
+        expire_date=body.expire_date,
+        image_url=body.image_url,
         added_by=user.uid,
         added_via=body.added_via,
         created_at=now,
         updated_at=now,
-        **body.model_dump(),
     )
-
-    items.append(ingredient)
-    _save_ingredients(items)
-
-    return ingredient
 
 
 @router.patch(
@@ -109,34 +132,37 @@ def update_ingredient(
     ingredient_id: str,
     body: IngredientUpdate,
     user: CurrentUser = Depends(get_current_user),
-):
-    items = _load_ingredients()
+) -> Ingredient:
+    _verify_member(fridge_id, user.uid)
+
+    ref = db.ingredients_col(fridge_id).document(ingredient_id)
+    snap = ref.get()
+    if not snap.exists:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Ingredient not found",
+        )
+
+    patch: Dict[str, Any] = {"updatedAt": db.utcnow()}
     update_data = body.model_dump(exclude_unset=True)
 
-    for index, item in enumerate(items):
-        if item.id != ingredient_id:
-            continue
+    # snake_case → camelCase Firestore 필드 이름 매핑
+    field_map = {
+        "name": "name",
+        "category": "category",
+        "emoji": "emoji",
+        "count": "count",
+        "expire_date": "expireDate",
+        "image_url": "imageURL",
+    }
+    for py_field, fs_field in field_map.items():
+        if py_field in update_data:
+            value = update_data[py_field]
+            # Enum 인스턴스는 value로 풀기
+            patch[fs_field] = value.value if hasattr(value, "value") else value
 
-        if item.fridge_id != fridge_id or item.added_by != user.uid:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Ingredient not found",
-            )
-
-        updated = item.model_copy(
-            update={
-                **update_data,
-                "updated_at": _now(),
-            }
-        )
-        items[index] = updated
-        _save_ingredients(items)
-        return updated
-
-    raise HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail="Ingredient not found",
-    )
+    ref.update(patch)
+    return _ingredient_from_snapshot(ref.get(), fridge_id)
 
 
 @router.delete(
@@ -148,25 +174,17 @@ def delete_ingredient(
     fridge_id: str,
     ingredient_id: str,
     user: CurrentUser = Depends(get_current_user),
-):
-    items = _load_ingredients()
-    kept_items = [
-        item
-        for item in items
-        if not (
-            item.id == ingredient_id
-            and item.fridge_id == fridge_id
-            and item.added_by == user.uid
-        )
-    ]
+) -> None:
+    _verify_member(fridge_id, user.uid)
 
-    if len(kept_items) == len(items):
+    ref = db.ingredients_col(fridge_id).document(ingredient_id)
+    snap = ref.get()
+    if not snap.exists:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Ingredient not found",
         )
-
-    _save_ingredients(kept_items)
+    ref.delete()
 
 
 @router.post(
@@ -178,6 +196,8 @@ def ingest_from_receipt(
     body: ReceiptIngestRequest,
     user: CurrentUser = Depends(get_current_user),
 ):
+    # OCR 서비스(별도 8081 포트) 통합 단계에서 구현. 현재는 Frontend가
+    # OcrService로 직접 호출 → 사용자 수정 → POST /ingredients 흐름.
     raise _NOT_IMPL
 
 

@@ -1,7 +1,7 @@
 # 냉장고를 부탁해 - Server
 
 Python + FastAPI + **Render.com** 기반 백엔드.
-Firebase는 Auth/Firestore/FCM 용도로만 사용 (Spark 무료 플랜).
+Firebase (Auth/Firestore/FCM) + OpenAI (챗봇·레시피 추천).
 
 - **담당**: 고범창 (서버)
 - **Firebase 프로젝트**: `projectsims-9dc71`
@@ -15,175 +15,250 @@ Firebase는 Auth/Firestore/FCM 용도로만 사용 (Spark 무료 플랜).
 ```
 Backend/server/
 ├── app/
-│   ├── main.py            # FastAPI 인스턴스 + CORS + 라우터 등록
-│   ├── auth.py            # Firebase ID 토큰 검증 + cron secret 검증
-│   ├── schemas/           # Pydantic 모델 (도메인별 분리)
-│   │   ├── _base.py       # CamelModel (snake_case ↔ camelCase 변환)
-│   │   ├── common.py
-│   │   ├── dummy.py
-│   │   ├── ingredients.py
-│   │   ├── recipes.py
-│   │   ├── chat.py
-│   │   ├── fcm.py
-│   │   └── tasks.py
-│   └── routers/
-│       ├── health.py      # GET / , GET /healthz
-│       ├── dummy.py       # GET /dummy/whoami , POST /dummy/echo
-│       ├── ingredients.py # 식재료 CRUD + OCR/이미지 등록 (stub)
-│       ├── recipes.py     # 레시피 추천/이력 (stub)
-│       ├── chat.py        # 챗봇 (stub)
-│       ├── fcm.py         # FCM 디바이스 등록 (stub)
-│       └── tasks.py       # cron-job.org 호출 endpoint (stub)
-├── docs/
-│   ├── api-v1.md
-│   └── schema-v1.md
+│   ├── main.py             # FastAPI 인스턴스 + dotenv + CORS + 라우터 등록
+│   ├── auth.py             # Firebase ID 토큰 검증 + cron secret 검증
+│   ├── db.py               # Firestore 어댑터 (컬렉션 헬퍼)
+│   ├── routers/
+│   │   ├── health.py       # GET / , GET /healthz
+│   │   ├── dummy.py        # GET /dummy/whoami , POST /dummy/echo
+│   │   ├── users.py        # GET /users/me
+│   │   ├── fridges.py      # POST /fridges, GET /fridges/me, POST /fridges/join
+│   │   ├── ingredients.py  # 식재료 CRUD (+ from-receipt/from-image stub)
+│   │   ├── recipes.py      # POST /recipes/recommend, GET /recipes/history
+│   │   ├── chat.py         # POST /chat
+│   │   ├── fcm.py          # POST /fcm/register
+│   │   └── tasks.py        # POST /tasks/check-expiry (cron-job.org)
+│   ├── schemas/            # Pydantic 모델 (CamelModel)
+│   └── services/
+│       └── llm_service.py  # OpenAI 호출 (챗 + 레시피 추천)
+├── docs/                   # api-v1.md, schema-v1.md
 ├── .env.example
 ├── .dockerignore
 ├── Dockerfile
 ├── README.md
-├── render.yaml            # Render Blueprint (자동 배포 설정)
+├── render.yaml             # Render Blueprint (자동 배포)
 └── requirements.txt
 ```
 
 ---
 
-## 2. 로컬 실행 (Week 1 합격 기준)
+## 2. 로컬 실행 (Windows / cmd 기준)
 
 ### 사전 준비 (1회)
 
-1. **Python 3.11 권장** (3.13도 동작은 함)
-2. **Firebase Admin SDK 서비스 계정 키 발급**
-   - [Firebase Console](https://console.firebase.google.com/project/projectsims-9dc71/settings/serviceaccounts/adminsdk) → "새 비공개 키 생성"
-   - 다운로드한 JSON 파일을 `Backend/server/service-account.json` 으로 저장 (`.gitignore` 처리됨)
-3. **`.env` 파일 생성**
-   ```powershell
-   cp .env.example .env
-   ```
+#### a) Python 3.12 설치 확인
 
-### 실행
+```cmd
+py -3.12 --version
+```
 
-```powershell
-# 가상환경
-python -m venv venv
-.\venv\Scripts\Activate.ps1
+설치 안 되어 있으면 https://www.python.org/downloads/ 에서 받아 설치. (3.11 / 3.13도 동작은 함)
 
-# 의존성 설치
+#### b) Firebase 서비스 계정 키 발급
+
+1. https://console.firebase.google.com/project/projectsims-9dc71/settings/serviceaccounts/adminsdk
+2. **"새 비공개 키 생성"** → JSON 다운로드
+3. 다운로드한 파일을 **`Backend/server/service-account.json`** 으로 저장 (이름 정확히)
+4. `.gitignore`에 등록되어 있어 커밋될 위험 없음
+
+#### c) `.env` 파일 작성
+
+`Backend/server/.env` 파일 만들고 아래 내용 채우기:
+
+```dotenv
+# Firebase Admin SDK 서비스 계정 키 경로
+GOOGLE_APPLICATION_CREDENTIALS=./service-account.json
+
+# OpenAI API 키 (챗봇 + 레시피 추천)
+# https://platform.openai.com/api-keys
+OPENAI_API_KEY=sk-여기에_실제_키
+
+# /tasks/check-expiry 보호용 비밀키 (32자 랜덤)
+CRON_SECRET=여기에_랜덤_긴_문자열
+
+# 로컬 테스트: Bearer dev-token 으로 인증 우회
+# 배포 환경에서는 절대 1로 두지 말 것
+DEV_AUTH_ENABLED=1
+
+# CORS — 모바일 앱만 쓰면 그대로 두기
+CORS_ORIGINS=http://localhost:3000,http://localhost:8000
+```
+
+`CRON_SECRET` 32자 랜덤 생성 (cmd, venv 활성화 후):
+
+```cmd
+python -c "import secrets; print(secrets.token_urlsafe(24))"
+```
+
+> ⚠️ `OPENAI_API_KEY` 없으면 `/chat`, `/recipes/recommend` 호출 시 fallback 응답이 나옵니다. 서버는 뜨지만 LLM 기능은 작동 안 함.
+
+### 가상환경 + 의존성 설치
+
+```cmd
+cd Backend\server
+
+py -3.12 -m venv venv
+venv\Scripts\activate.bat
+
 pip install -r requirements.txt
+```
 
-# 서버 실행
-$env:GOOGLE_APPLICATION_CREDENTIALS = ".\service-account.json"
+### 서버 실행
+
+```cmd
 uvicorn app.main:app --reload --port 8000
 ```
 
-### 동작 확인
+성공 로그:
 
-- 브라우저에서 [http://localhost:8000/docs](http://localhost:8000/docs) 접속 → Swagger UI
-- `GET /` 호출 → `{"status":"ok",...}` 반환
-- `GET /dummy/whoami` 호출하려면 Firebase ID 토큰 필요:
-  - Flutter 앱에서 `FirebaseAuth.instance.currentUser?.getIdToken()` 출력
-  - Swagger UI 우측 상단 "Authorize" → `Bearer <토큰>` 입력 → "Try it out"
+```
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     Application startup complete.
+```
+
+`.env`는 `app/main.py:5`의 `load_dotenv()`가 자동으로 읽어줍니다.
+
+### Swagger UI 동작 확인
+
+브라우저 → http://localhost:8000/docs
+
+1. 우상단 **Authorize** 클릭
+2. Value 칸에 **`dev-token`** 만 입력 (⚠️ `Bearer` 접두사 붙이면 안 됨 — Swagger가 자동으로 붙임)
+3. **Authorize** → **Close**
+
+이제 보호된 엔드포인트들이 `user.uid = "user_1"` 로 동작합니다.
+
+### 통합 시나리오 (한 바퀴 돌려보기)
+
+| 순서 | 엔드포인트 | body |
+|---|---|---|
+| 1 | `GET /users/me` | — |
+| 2 | `POST /fridges` | `{"name":"내 냉장고"}` → inviteCode 응답 |
+| 3 | `POST /fridges/{fid}/ingredients` | `{"name":"양파","category":"야채","count":3,"expireDate":"2026-05-26","addedVia":"manual"}` |
+| 4 | `GET /fridges/{fid}/ingredients` | 등록한 식재료 목록 |
+| 5 | `POST /recipes/recommend` | 위 ingredients 담아 호출 → LLM 응답 |
+| 6 | `POST /chat` | `{"message":"오늘 저녁 뭐 먹지?"}` → sessionId 응답 |
+| 7 | 같은 sessionId로 `POST /chat` 재호출 | 이전 대화 기억 확인 |
+
+각 호출 후 Firebase 콘솔(Firestore)에서 데이터가 잘 들어가는지 시각적으로도 확인 권장.
 
 ---
 
-## 3. Docker로 실행 (배포 전 검증)
+## 3. 다음 실행 시 (이후)
 
-```powershell
+가상환경 다시 활성화만:
+
+```cmd
+cd Backend\server
+venv\Scripts\activate.bat
+uvicorn app.main:app --reload --port 8000
+```
+
+`requirements.txt`가 바뀌었을 때만 `pip install -r requirements.txt` 추가.
+
+---
+
+## 4. Docker로 실행 (선택)
+
+배포 전 컨테이너 동작 검증용.
+
+```cmd
 docker build -t naengbu-server:dev .
 
-docker run --rm -p 8080:8080 `
-  -v "${PWD}/service-account.json:/app/service-account.json:ro" `
-  -e GOOGLE_APPLICATION_CREDENTIALS=/app/service-account.json `
+docker run --rm -p 8080:8080 ^
+  -v %cd%/service-account.json:/app/service-account.json:ro ^
+  -e GOOGLE_APPLICATION_CREDENTIALS=/app/service-account.json ^
+  -e OPENAI_API_KEY=%OPENAI_API_KEY% ^
+  -e CRON_SECRET=%CRON_SECRET% ^
+  -e DEV_AUTH_ENABLED=1 ^
   naengbu-server:dev
 ```
 
-→ [http://localhost:8080/docs](http://localhost:8080/docs) 접속.
+→ http://localhost:8080/docs
 
 ---
 
-## 4. Render.com 배포 (사용자분이 직접 실행)
+## 5. Render.com 배포
 
 > 카드 등록 불필요. GitHub 로그인만으로 시작 가능.
-> 한도 초과 시 자동 정지 (예상 못한 청구 X).
 
-### 사전 준비 (1회)
+### Step 1. Blueprint로 서비스 생성
 
 1. https://render.com 접속 → **Sign in with GitHub**
-2. GitHub 권한 승인 (Render가 repo 읽기 권한 받음)
-3. 코드를 GitHub `main` 브랜치에 미리 push 해두기 (`Backend/server/` 포함)
+2. 대시보드 → **New +** → **Blueprint**
+3. `Project-SIMS` 레포 선택 → Render가 `Backend/server/render.yaml` 자동 인식
+4. **Apply** 클릭 → `naengbu-server` 서비스 생성됨
 
-### 첫 배포 절차
+### Step 2. Secret File 업로드
 
-#### Step 1. Blueprint로 서비스 생성
+생성된 서비스 → **Environment** 탭 → **Secret Files** → **Add Secret File**
 
-1. Render 대시보드 → **New +** → **Blueprint**
-2. **Connect a repository** → `Project-SIMS` 선택
-3. Render가 `Backend/server/render.yaml` 자동 인식 → "Apply" 클릭
-4. 서비스 이름 `naengbu-server`로 자동 생성됨
+- **Filename**: `service-account.json`
+- **Contents**: 로컬 `Backend/server/service-account.json` 전체 내용 복붙
+- **Save**
 
-#### Step 2. Secret File 업로드 (Firebase 서비스 계정 키)
+Render가 `/etc/secrets/service-account.json` 경로로 마운트. `render.yaml`에서 이미 그 경로를 `GOOGLE_APPLICATION_CREDENTIALS`로 박아둠.
 
-1. 생성된 서비스 → **Environment** 탭
-2. **Secret Files** 섹션 → **Add Secret File**
-3. Filename: `service-account.json`
-4. Contents: 로컬에 받아둔 `service-account.json` 내용 전체 복붙
-5. Save
+### Step 3. 환경변수 입력
 
-> Render가 `/etc/secrets/service-account.json` 경로에 마운트해줍니다.
-> `render.yaml`에서 `GOOGLE_APPLICATION_CREDENTIALS=/etc/secrets/service-account.json`로 이미 설정됨.
+같은 **Environment** 탭의 **Environment Variables**:
 
-#### Step 3. CORS 환경변수 설정
+| Key | Value |
+|---|---|
+| `OPENAI_API_KEY` | 본인 OpenAI 키 |
+| `CRON_SECRET` | `.env`의 값 그대로 (또는 새 랜덤) |
+| `CORS_ORIGINS` | `http://localhost:3000,http://localhost:8000` |
 
-1. 같은 **Environment** 탭 → **Environment Variables** 섹션
-2. `CORS_ORIGINS` 값 입력 (Flutter 앱은 모바일이라 빈 값/localhost만 둬도 무방):
-   ```
-   http://localhost:3000,http://localhost:8000
-   ```
-3. Save → 자동 재배포 시작
+⚠️ `DEV_AUTH_ENABLED`은 절대 안 넣기. 들어가면 누구나 `dev-token`으로 남의 데이터 접근 가능.
 
-#### Step 4. 배포 확인
+**Save Changes** → 자동 재배포.
 
-1. **Logs** 탭에서 빌드/배포 진행 상황 확인 (5~10분 소요)
-2. 완료되면 상단에 URL 표시: `https://naengbu-server.onrender.com` (서비스명에 따라 다름)
-3. 브라우저에서 `https://<URL>/docs` 접속 → Swagger UI 뜨면 성공
-4. 팀 단톡방에 URL 공유
+### Step 4. 배포 확인
 
-### ⚠️ 무료 플랜 주의사항
-
-- **15분 무사용 시 sleep** → 첫 요청 시 30초~1분 콜드스타트
-- **시연 5분 전에 미리 한 번 호출**해서 깨워두기 (예: `curl https://<URL>/healthz`)
-- 750시간/월 무료 (한 달 = 720~744시간이라 24/7 운영 가능)
-- 메모리 512MB / CPU 0.1 vCPU 제한
+- **Logs** 탭에서 빌드 진행 (5~10분)
+- 완료 후 상단의 서비스 URL: `https://naengbu-server.onrender.com` 형식
+- 브라우저에서 `https://<URL>/healthz` → `{"status":"ok",...}` 응답 확인
+- `/docs` 에서 Swagger 동작 확인 (단, `dev-token` 안 먹힘 — Flutter `getIdToken()` 출력값으로 인증)
 
 ### 이후 자동 배포
 
-`render.yaml`의 `autoDeploy: true` 덕분에, **GitHub `main` 브랜치에 push만 하면 Render가 자동으로 다시 빌드/배포**합니다.
+`render.yaml`의 `autoDeploy: true` 덕분에 **GitHub `main` 브랜치에 push만 하면** Render가 자동으로 재배포.
+
+### ⚠️ 무료 플랜 주의
+
+- **15분 무사용 시 sleep** → 첫 요청 시 30초~1분 콜드스타트
+- 시연 5분 전 `curl https://<URL>/healthz` 로 깨워두기
+- 750시간/월 무료 (24/7 운영 가능)
+- 메모리 512MB / CPU 0.1 vCPU
 
 ---
 
-## 5. 환경 변수
+## 6. 환경 변수 정리
 
-| 이름 | 필수? | 설명 |
-|------|-------|------|
-| `GOOGLE_APPLICATION_CREDENTIALS` | ✅ | 서비스 계정 키 경로 (로컬: 파일 경로 / Render: `/etc/secrets/service-account.json`) |
-| `CORS_ORIGINS` | 선택 | 콤마 구분 도메인 (기본: localhost:3000, localhost:8000) |
-| `PORT` | Render 자동 주입 | 컨테이너 리스닝 포트 (기본 10000) |
+| 이름 | 로컬 | Render | 설명 |
+|------|------|--------|------|
+| `GOOGLE_APPLICATION_CREDENTIALS` | `./service-account.json` | `/etc/secrets/service-account.json` | Firebase Admin SDK 키 |
+| `OPENAI_API_KEY` | `sk-...` | `sk-...` | OpenAI API 키 |
+| `CRON_SECRET` | 32자 랜덤 | 32자 랜덤 | `/tasks/check-expiry` 보호 헤더 |
+| `CORS_ORIGINS` | 선택 | 선택 | 콤마 구분 도메인 |
+| `DEV_AUTH_ENABLED` | `1` | ❌ 안 넣음 | `Bearer dev-token` 인증 우회 |
+| `PORT` | — | 자동 주입 | Render 컨테이너 포트 |
 
 ---
 
-## 6. 1주차 체크리스트
+## 7. 트러블슈팅
 
-- [x] FastAPI 스캐폴딩 + 헬스체크
-- [x] Firebase Auth 의존성 (`get_current_user`)
-- [x] 더미 엔드포인트 (`/dummy/whoami`, `/dummy/echo`)
-- [x] Dockerfile
-- [x] Render Blueprint (`render.yaml`)
-- [x] Firestore 스키마 v1 **확정** (`docs/schema-v1.md`)
-- [x] API 명세 v1 (`docs/api-v1.md`)
-- [x] Week 2/3 Stub 라우터 11개 (Pydantic 검증 + 501 반환, Swagger UI 노출)
-- [x] Cron 보호 의존성 (`verify_cron_secret`, `X-Cron-Secret` 헤더)
-- [x] **로컬 검증**: `uvicorn` + Docker 실행 통과
-- [ ] **사용자분 직접**: Firebase Auth/Firestore/FCM 콘솔 활성화
-- [ ] **사용자분 직접**: 코드 GitHub `main`에 push
-- [ ] **사용자분 직접**: Render에 Blueprint 배포 + Secret File 업로드
-- [ ] **사용자분 직접**: `CRON_SECRET` 32자 랜덤 생성 + Render 환경변수 등록
-- [ ] **사용자분 직접**: 팀에 Render URL 공유
+### `Invalid Firebase ID token: Wrong number of segments`
+Swagger Authorize에 `Bearer dev-token` 처럼 **`Bearer` 접두사를 같이 입력**한 경우. 토큰 값(`dev-token`)만 입력해야 함.
+
+### `RuntimeError: OPENAI_API_KEY 환경변수가 설정되지 않았습니다`
+`.env`에 키가 없거나, 서버 실행 디렉터리가 `.env`와 다른 곳일 때. `Backend\server` 위치에서 실행하는지 확인.
+
+### `firebase_admin.exceptions.DefaultCredentialsError`
+`service-account.json`이 없거나 경로 잘못. `Backend\server\service-account.json` 위치에 정확히 있는지 확인.
+
+### 401 그대로 / dev-token 안 먹힘
+`.env`에 `DEV_AUTH_ENABLED=1` 있는지 확인. 없으면 추가 후 서버 재시작.
+
+### `address already in use` (port 8000)
+이전 uvicorn이 떠있음. `taskkill /IM python.exe /F` 후 재실행 (다른 Python 프로세스 다 죽으니 주의).
