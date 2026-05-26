@@ -15,8 +15,11 @@ class RecipeService {
     'API_BASE_URL',
     defaultValue: 'http://10.0.2.2:8000',
   );
-  static const String _fridgeId = 'fridge_1'; // 임시 냉장고 ID
-  static const String _devToken = 'dev-token';
+
+  /// 현재 로그인 사용자의 Firebase ID 토큰
+  static Future<String?> _idToken() async {
+    return FirebaseAuth.instance.currentUser?.getIdToken();
+  }
 
   // 더미 레시피 데이터
   static final List<Recipe> _recipes = [
@@ -96,11 +99,12 @@ class RecipeService {
     }
 
     try {
+      final fridgeId = await IngredientService.currentFridgeId();
       final response = await _request(
         method: 'POST',
         path: '/recipes/recommend',
         body: {
-          'fridgeId': _fridgeId,
+          'fridgeId': fridgeId,
           'maxResults': maxResults,
           'ingredients': ingredients.map(_ingredientToJson).toList(),
         },
@@ -163,15 +167,22 @@ class RecipeService {
     Map<String, dynamic>? body,
   }) async {
     final client = HttpClient();
-    client.connectionTimeout = const Duration(seconds: 5);
+    // Render 콜드스타트 대비
+    client.connectionTimeout = const Duration(seconds: 60);
 
     try {
+      final token = await _idToken();
+      if (token == null) {
+        throw StateError('Firebase 로그인 토큰을 가져오지 못했습니다.');
+      }
       final request = await client.openUrl(method, Uri.parse('$_baseUrl$path'));
-      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $_devToken');
-      request.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
+      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+      request.headers.contentType =
+          ContentType('application', 'json', charset: 'utf-8');
 
       if (body != null) {
-        request.write(jsonEncode(body));
+        // HttpClient.write는 기본 latin1 — 한글 깨짐. UTF-8 바이트로 직접 add.
+        request.add(utf8.encode(jsonEncode(body)));
       }
 
       final response = await request.close();

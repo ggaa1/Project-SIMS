@@ -25,10 +25,10 @@ class Fridge(FridgeBase):
     invite_code: str = Field(
         ...,
         min_length=6,
-        max_length=6,
-        pattern=r"^[A-Z]{6}$",
+        max_length=7,
+        pattern=r"^[A-HJ-NP-Z2-9]{6,7}$",
         examples=["SZCSYJ"],
-        description="동거인 초대용 6자 영문 대문자 코드",
+        description="동거인 초대용 6~7자 코드 (혼동 문자 I,O,0,1 제외)",
     )
     created_at: datetime
     updated_at: datetime
@@ -42,8 +42,8 @@ class FridgeJoinRequest(CamelModel):
     invite_code: str = Field(
         ...,
         min_length=6,
-        max_length=6,
-        pattern=r"^[A-Z]{6}$",
+        max_length=7,
+        pattern=r"^[A-HJ-NP-Z2-9]{6,7}$",
         examples=["SZCSYJ"],
         description="가입할 냉장고의 초대 코드",
     )

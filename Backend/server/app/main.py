@@ -1,5 +1,10 @@
 import os
 
+from dotenv import load_dotenv
+
+# routers import 전에 .env 로드 (auth.py / llm_service.py가 import 시점에 환경변수를 읽음)
+load_dotenv()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -14,6 +19,7 @@ from app.routers import (
     tasks,
     users,
 )
+from app.ocr.router import router as ocr_router
 
 
 app = FastAPI(
@@ -48,3 +54,4 @@ app.include_router(recipes.router)
 app.include_router(chat.router)
 app.include_router(fcm.router)
 app.include_router(tasks.router)
+app.include_router(ocr_router)

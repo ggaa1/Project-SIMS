@@ -27,13 +27,21 @@ from app.schemas.chat import ChatRequest, ChatResponse
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------
-# OpenAI 클라이언트 초기화
+# OpenAI 클라이언트 초기화 (lazy)
+# - 모듈 import 시점에 키를 요구하면 키 미설정 시 서버 자체가 뜨지 못함.
+# - 첫 호출 시점에 초기화하고, 키 없으면 RuntimeError → 기존 try/except가 fallback 처리.
 # ---------------------------------------------------------------------
-_API_KEY = os.getenv("OPENAI_API_KEY")
-if not _API_KEY:
-    raise RuntimeError("OPENAI_API_KEY 환경변수가 설정되지 않았습니다.")
+_client: Optional[OpenAI] = None
 
-client = OpenAI(api_key=_API_KEY)
+
+def _get_client() -> OpenAI:
+    global _client
+    if _client is None:
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise RuntimeError("OPENAI_API_KEY 환경변수가 설정되지 않았습니다.")
+        _client = OpenAI(api_key=api_key)
+    return _client
 
 # ---------------------------------------------------------------------
 # 상수
@@ -164,7 +172,7 @@ def generate_recipe_recommendation(
     """
 
     def _do_call():
-        return client.beta.chat.completions.parse(
+        return _get_client().beta.chat.completions.parse(
             model=MODEL_NAME,
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -265,7 +273,7 @@ def generate_chat_reply(
     messages.append({"role": "user", "content": request.message})
 
     def _do_call():
-        return client.chat.completions.create(
+        return _get_client().chat.completions.create(
             model=MODEL_NAME,
             messages=messages,
             temperature=0.8,
