@@ -9,7 +9,10 @@ import '../widgets/bottom_nav.dart';
 import 'ingredient_detail_screen.dart';
 
 class IngredientListScreen extends StatefulWidget {
-  const IngredientListScreen({super.key});
+  /// 진입 시 검색어로 사전 필터링 (홈 검색 등)
+  final String? initialKeyword;
+
+  const IngredientListScreen({super.key, this.initialKeyword});
 
   @override
   State<IngredientListScreen> createState() => _IngredientListScreenState();
@@ -23,10 +26,24 @@ class _IngredientListScreenState extends State<IngredientListScreen> {
   String? currentFridgeId;
   bool loadingFridges = true;
 
+  // 검색
+  final searchController = TextEditingController();
+  String searchKeyword = '';
+
   @override
   void initState() {
     super.initState();
+    if (widget.initialKeyword != null && widget.initialKeyword!.isNotEmpty) {
+      searchKeyword = widget.initialKeyword!.trim();
+      searchController.text = searchKeyword;
+    }
     bootstrap();
+  }
+
+  @override
+  void dispose() {
+    searchController.dispose();
+    super.dispose();
   }
 
   /// 식재료 불러오기
@@ -355,7 +372,9 @@ class _IngredientListScreenState extends State<IngredientListScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   headerTitle(),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 16),
+                  searchBar(),
+                  const SizedBox(height: 16),
                   Expanded(
                     child: _buildListBody(snapshot),
                   ),
@@ -364,6 +383,46 @@ class _IngredientListScreenState extends State<IngredientListScreen> {
             },
           ),
         ),
+      ),
+    );
+  }
+
+  Widget searchBar() {
+    return Container(
+      height: 48,
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.search, color: Colors.grey, size: 20),
+          const SizedBox(width: 8),
+          Expanded(
+            child: TextField(
+              controller: searchController,
+              decoration: const InputDecoration(
+                border: InputBorder.none,
+                isCollapsed: true,
+                hintText: '식재료 이름으로 검색',
+                hintStyle: TextStyle(color: Colors.grey, fontSize: 14),
+              ),
+              style: const TextStyle(fontSize: 14),
+              onChanged: (value) {
+                setState(() => searchKeyword = value.trim());
+              },
+            ),
+          ),
+          if (searchKeyword.isNotEmpty)
+            GestureDetector(
+              onTap: () {
+                searchController.clear();
+                setState(() => searchKeyword = '');
+              },
+              child: const Icon(Icons.close, color: Colors.grey, size: 18),
+            ),
+        ],
       ),
     );
   }
@@ -377,13 +436,31 @@ class _IngredientListScreenState extends State<IngredientListScreen> {
       return Center(child: Text('오류가 발생했습니다: ${snapshot.error}'));
     }
 
-    final ingredients = snapshot.data ?? [];
+    final all = snapshot.data ?? [];
 
-    if (ingredients.isEmpty) {
+    if (all.isEmpty) {
       return const Center(
         child: Text(
           '등록된 식재료가 없습니다.',
           style: TextStyle(color: AppColors.textSub),
+        ),
+      );
+    }
+
+    final keyword = searchKeyword.toLowerCase();
+    final filtered = keyword.isEmpty
+        ? all
+        : all
+            .where((item) =>
+                item.name.toLowerCase().contains(keyword) ||
+                item.category.toLowerCase().contains(keyword))
+            .toList();
+
+    if (filtered.isEmpty) {
+      return Center(
+        child: Text(
+          '"$searchKeyword" 검색 결과가 없습니다.',
+          style: const TextStyle(color: AppColors.textSub),
         ),
       );
     }
@@ -395,9 +472,9 @@ class _IngredientListScreenState extends State<IngredientListScreen> {
         });
       },
       child: ListView.builder(
-        itemCount: ingredients.length,
+        itemCount: filtered.length,
         itemBuilder: (context, index) {
-          return ingredientCard(ingredients[index]);
+          return ingredientCard(filtered[index]);
         },
       ),
     );

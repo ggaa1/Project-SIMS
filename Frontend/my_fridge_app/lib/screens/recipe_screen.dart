@@ -5,6 +5,7 @@ import '../services/ingredient_service.dart';
 import '../services/recipe_service.dart';
 import '../theme/app_colors.dart';
 import '../widgets/bottom_nav.dart';
+import 'ocr_screen.dart';
 import 'recipe_detail_screen.dart';
 
 class RecipeScreen extends StatefulWidget {
@@ -16,6 +17,7 @@ class RecipeScreen extends StatefulWidget {
 
 class _RecipeScreenState extends State<RecipeScreen> {
   bool isLoading = false;
+  String loadingStage = '추천 받는 중…';
   String? errorMessage;
   List<Ingredient> ingredients = [];
   List<Recipe> recipes = [];
@@ -26,9 +28,15 @@ class _RecipeScreenState extends State<RecipeScreen> {
     loadInitialState();
   }
 
+  void _updateStage(String stage) {
+    if (!mounted) return;
+    setState(() => loadingStage = stage);
+  }
+
   Future<void> loadInitialState() async {
     setState(() {
       isLoading = true;
+      loadingStage = '추천 받는 중…';
       errorMessage = null;
     });
 
@@ -36,7 +44,7 @@ class _RecipeScreenState extends State<RecipeScreen> {
       final loadedIngredients = await IngredientService.getIngredients();
       final loadedRecipes = loadedIngredients.isEmpty
           ? <Recipe>[]
-          : await RecipeService.recommendRecipes();
+          : await RecipeService.recommendRecipes(onStage: _updateStage);
 
       if (!mounted) return;
 
@@ -58,6 +66,7 @@ class _RecipeScreenState extends State<RecipeScreen> {
   Future<void> refreshRecommendations() async {
     setState(() {
       isLoading = true;
+      loadingStage = '추천 받는 중…';
       errorMessage = null;
     });
 
@@ -74,7 +83,11 @@ class _RecipeScreenState extends State<RecipeScreen> {
         return;
       }
 
-      final recommendedRecipes = await RecipeService.recommendRecipes();
+      // 사용자가 명시적으로 새로고침 → 캐시 무시
+      final recommendedRecipes = await RecipeService.recommendRecipes(
+        forceRefresh: true,
+        onStage: _updateStage,
+      );
 
       if (!mounted) return;
 
@@ -210,13 +223,27 @@ class _RecipeScreenState extends State<RecipeScreen> {
         ),
         child: Center(
           child: isLoading
-              ? const SizedBox(
-                  width: 22,
-                  height: 22,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: Colors.white,
-                  ),
+              ? Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Text(
+                      loadingStage,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
                 )
               : const Text(
                   '보유 식재료로 추천받기',
@@ -234,15 +261,56 @@ class _RecipeScreenState extends State<RecipeScreen> {
     return Center(
       child: Container(
         width: double.infinity,
-        padding: const EdgeInsets.all(18),
+        padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(14),
         ),
-        child: const Text(
-          '등록된 식재료가 없습니다.\n식재료를 먼저 등록하면 추천을 받을 수 있습니다.',
-          textAlign: TextAlign.center,
-          style: TextStyle(color: AppColors.textSub, height: 1.5),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.kitchen_outlined,
+                size: 48, color: AppColors.textSub),
+            const SizedBox(height: 10),
+            const Text(
+              '등록된 식재료가 없습니다',
+              style: TextStyle(
+                color: AppColors.textMain,
+                fontSize: 15,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              '식재료를 먼저 등록하면 추천을 받을 수 있어요.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppColors.textSub, height: 1.4),
+            ),
+            const SizedBox(height: 14),
+            GestureDetector(
+              onTap: () {
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (_) => const OcrScreen()),
+                );
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 18, vertical: 10),
+                decoration: BoxDecoration(
+                  color: AppColors.mainGreen,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: const Text(
+                  '식재료 등록하러 가기',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -271,27 +339,59 @@ class _RecipeScreenState extends State<RecipeScreen> {
 
   Widget recipeList() {
     if (isLoading && recipes.isEmpty) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
-    if (ingredients.isEmpty) {
-      return emptyIngredientView();
-    }
-
-    if (recipes.isEmpty) {
-      return const Center(
-        child: Text(
-          '추천 결과가 없습니다.',
-          style: TextStyle(color: AppColors.textSub),
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const CircularProgressIndicator(),
+            const SizedBox(height: 14),
+            Text(
+              loadingStage,
+              style: const TextStyle(
+                color: AppColors.textSub,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
         ),
       );
     }
 
-    return ListView.builder(
-      itemCount: recipes.length,
-      itemBuilder: (context, index) {
-        return recipeCard(context, recipes[index]);
-      },
+    final body = ingredients.isEmpty
+        ? ListView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            children: [
+              SizedBox(
+                height: MediaQuery.of(context).size.height * 0.4,
+                child: emptyIngredientView(),
+              ),
+            ],
+          )
+        : recipes.isEmpty
+            ? ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: const [
+                  SizedBox(height: 80),
+                  Center(
+                    child: Text(
+                      '추천 결과가 없습니다.',
+                      style: TextStyle(color: AppColors.textSub),
+                    ),
+                  ),
+                ],
+              )
+            : ListView.builder(
+                physics: const AlwaysScrollableScrollPhysics(),
+                itemCount: recipes.length,
+                itemBuilder: (context, index) {
+                  return recipeCard(context, recipes[index]);
+                },
+              );
+
+    return RefreshIndicator(
+      onRefresh: refreshRecommendations,
+      child: body,
     );
   }
 

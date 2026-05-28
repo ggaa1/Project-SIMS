@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
+import '../services/notification_settings_service.dart';
 import '../theme/app_colors.dart';
 import 'login_screen.dart';
 import 'share_fridge_screen.dart';
@@ -13,6 +14,41 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   bool isNotificationOn = true;
+  bool isTogglingNotification = false;
+
+  @override
+  void initState() {
+    super.initState();
+    loadNotificationState();
+  }
+
+  Future<void> loadNotificationState() async {
+    final enabled = await NotificationSettingsService.isEnabled();
+    if (!mounted) return;
+    setState(() => isNotificationOn = enabled);
+  }
+
+  Future<void> toggleNotification(bool value) async {
+    if (isTogglingNotification) return;
+    // 낙관적 업데이트
+    setState(() {
+      isNotificationOn = value;
+      isTogglingNotification = true;
+    });
+    try {
+      await NotificationSettingsService.setEnabled(value);
+    } catch (_) {
+      // 실패 시 롤백
+      if (mounted) setState(() => isNotificationOn = !value);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('알림 설정 저장에 실패했습니다.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => isTogglingNotification = false);
+    }
+  }
 
   Future<void> logout() async {
     await AuthService.logout();
@@ -61,11 +97,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   Switch(
                     value: isNotificationOn,
                     activeColor: AppColors.mainGreen,
-                    onChanged: (value) {
-                      setState(() {
-                        isNotificationOn = value;
-                      });
-                    },
+                    onChanged: isTogglingNotification ? null : toggleNotification,
                   ),
                 ],
               ),
