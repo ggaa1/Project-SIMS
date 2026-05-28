@@ -6,7 +6,9 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
+import '../models/notification_record.dart';
 import '../repositories/fcm_token_repository.dart';
+import 'notification_history_service.dart';
 
 /// 백그라운드 알림 처리
 @pragma('vm:entry-point')
@@ -170,6 +172,9 @@ class FcmService {
 
     if (notification == null) return;
 
+    // 히스토리에 저장
+    await _recordNotification(message);
+
     // 앱 사용 중이면 직접 알림 표시
     await _localNotifications.show(
       notification.hashCode,
@@ -190,10 +195,34 @@ class FcmService {
     );
   }
 
-  static void _handleMessageOpenedApp(RemoteMessage message) {
+  static Future<void> _handleMessageOpenedApp(RemoteMessage message) async {
     if (kDebugMode) print('[FCM] 알림 탭으로 열림: ${message.messageId}');
+    // 탭 시점에도 히스토리에 누락 없이 저장
+    await _recordNotification(message);
     if (onNotificationTap != null) {
       onNotificationTap!(message.data);
+    }
+  }
+
+  static Future<void> _recordNotification(RemoteMessage message) async {
+    final notification = message.notification;
+    final title = notification?.title ?? message.data['title'] as String? ?? '';
+    final body = notification?.body ?? message.data['body'] as String? ?? '';
+    if (title.isEmpty && body.isEmpty) return;
+
+    final id = message.messageId ??
+        '${DateTime.now().millisecondsSinceEpoch}';
+    try {
+      await NotificationHistoryService.add(
+        NotificationRecord(
+          id: id,
+          title: title,
+          body: body,
+          receivedAt: DateTime.now(),
+        ),
+      );
+    } catch (_) {
+      // 저장 실패해도 알림 흐름은 계속
     }
   }
 }

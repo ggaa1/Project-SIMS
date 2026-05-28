@@ -234,7 +234,7 @@ class _OcrScreenState extends State<OcrScreen> {
         category: item.category,
         emoji: emojiForCategory(item.category),
         count: item.count,
-        expireDate: DateTime.now().add(const Duration(days: 7)),
+        expireDate: item.expireDate,
         imageLocalPath: pickedImage?.path,
         addedVia: source,
       );
@@ -385,9 +385,54 @@ class _OcrScreenState extends State<OcrScreen> {
               ),
             ],
           ),
+          const SizedBox(height: 4),
+          InkWell(
+            onTap: () => pickDraftItemDate(item),
+            borderRadius: BorderRadius.circular(8),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+              child: Row(
+                children: [
+                  const Icon(Icons.event, size: 18, color: AppColors.textSub),
+                  const SizedBox(width: 8),
+                  const Text(
+                    '유통기한',
+                    style: TextStyle(
+                      color: AppColors.textSub,
+                      fontSize: 13,
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    item.expireDateString,
+                    style: const TextStyle(
+                      color: AppColors.textMain,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  const Icon(Icons.chevron_right, size: 18, color: AppColors.textSub),
+                ],
+              ),
+            ),
+          ),
         ],
       ),
     );
+  }
+
+  Future<void> pickDraftItemDate(OcrDraftItem item) async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: item.expireDate,
+      firstDate: DateTime(now.year - 1),
+      lastDate: DateTime(now.year + 5),
+    );
+    if (picked == null) return;
+    setState(() {
+      item.expireDate = picked;
+    });
   }
 
   @override

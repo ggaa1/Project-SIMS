@@ -1,24 +1,25 @@
 import 'dart:convert';
-import 'dart:io';
+
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../models/ingredient.dart';
 import '../models/recipe.dart';
 import '../repositories/recipe_history_repository.dart';
+import 'api_client.dart';
 import 'ingredient_service.dart';
 
 /// 레시피 처리 서비스
 class RecipeService {
   RecipeService._();
 
-  static const String _baseUrl = String.fromEnvironment(
-    'API_BASE_URL',
-    defaultValue: 'http://10.0.2.2:8000',
-  );
+  /// 추천 결과 메모리 캐시.
+  /// 키: 식재료 ID 정렬 join (Task C 캐싱), 값: (recipes, 저장 시각)
+  static final Map<String, _RecipeCacheEntry> _recommendCache = {};
+  static const _cacheTtl = Duration(minutes: 10);
 
-  /// 현재 로그인 사용자의 Firebase ID 토큰
-  static Future<String?> _idToken() async {
-    return FirebaseAuth.instance.currentUser?.getIdToken();
+  /// 식재료 변경 시 호출. 캐시 무효화.
+  static void invalidateRecommendCache() {
+    _recommendCache.clear();
   }
 
   // 더미 레시피 데이터
@@ -87,10 +88,14 @@ class RecipeService {
         .map((items) => items.map((e) => e.recipe).toList());
   }
 
-  /// 레시피 추천
+  /// 레시피 추천.
+  /// [onStage] 콜백으로 콜드스타트 안내 메시지를 받을 수 있음.
+  /// [forceRefresh] true면 캐시 무시.
   static Future<List<Recipe>> recommendRecipes({
     int maxResults = 3,
     bool useDummyOnFailure = true,
+    void Function(String stage)? onStage,
+    bool forceRefresh = false,
   }) async {
     final ingredients = await IngredientService.getIngredients();
 
@@ -98,29 +103,48 @@ class RecipeService {
       return [];
     }
 
+    // 캐시 키: 식재료 ID 정렬 join + maxResults
+    final cacheKey = _cacheKey(ingredients, maxResults);
+    if (!forceRefresh) {
+      final cached = _recommendCache[cacheKey];
+      if (cached != null &&
+          DateTime.now().difference(cached.savedAt) < _cacheTtl) {
+        return cached.recipes;
+      }
+    }
+
     try {
       final fridgeId = await IngredientService.currentFridgeId();
-      final response = await _request(
-        method: 'POST',
-        path: '/recipes/recommend',
+      final response = await ApiClient.postJson(
+        '/recipes/recommend',
         body: {
           'fridgeId': fridgeId,
           'maxResults': maxResults,
           'ingredients': ingredients.map(_ingredientToJson).toList(),
         },
+        onStage: onStage,
       );
       final decoded = jsonDecode(response) as Map<String, dynamic>;
       final recipes = decoded['recipes'] as List<dynamic>? ?? [];
 
-      return recipes
+      final parsed = recipes
           .map((item) => _recipeFromJson(item as Map<String, dynamic>))
           .toList();
+
+      _recommendCache[cacheKey] =
+          _RecipeCacheEntry(recipes: parsed, savedAt: DateTime.now());
+      return parsed;
     } catch (_) {
       if (!useDummyOnFailure) rethrow;
       // 실패하면 더미 추천 사용
       await Future.delayed(const Duration(milliseconds: 600));
       return _dummyRecommendations(ingredients, maxResults);
     }
+  }
+
+  static String _cacheKey(List<Ingredient> ingredients, int maxResults) {
+    final ids = ingredients.map((e) => e.id).toList()..sort();
+    return '${ids.join(',')}|max=$maxResults';
   }
 
   /// 본 레시피 저장
@@ -160,43 +184,6 @@ class RecipeService {
   }
 
   // 내부 함수
-
-  static Future<String> _request({
-    required String method,
-    required String path,
-    Map<String, dynamic>? body,
-  }) async {
-    final client = HttpClient();
-    // Render 콜드스타트 대비
-    client.connectionTimeout = const Duration(seconds: 60);
-
-    try {
-      final token = await _idToken();
-      if (token == null) {
-        throw StateError('Firebase 로그인 토큰을 가져오지 못했습니다.');
-      }
-      final request = await client.openUrl(method, Uri.parse('$_baseUrl$path'));
-      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
-      request.headers.contentType =
-          ContentType('application', 'json', charset: 'utf-8');
-
-      if (body != null) {
-        // HttpClient.write는 기본 latin1 — 한글 깨짐. UTF-8 바이트로 직접 add.
-        request.add(utf8.encode(jsonEncode(body)));
-      }
-
-      final response = await request.close();
-      final responseBody = await response.transform(utf8.decoder).join();
-
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw HttpException(responseBody);
-      }
-
-      return responseBody;
-    } finally {
-      client.close(force: true);
-    }
-  }
 
   static Map<String, dynamic> _ingredientToJson(Ingredient ingredient) {
     return {
@@ -263,4 +250,10 @@ class RecipeService {
       ),
     ];
   }
+}
+
+class _RecipeCacheEntry {
+  final List<Recipe> recipes;
+  final DateTime savedAt;
+  const _RecipeCacheEntry({required this.recipes, required this.savedAt});
 }

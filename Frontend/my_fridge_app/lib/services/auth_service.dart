@@ -3,6 +3,7 @@ import '../models/user_profile.dart';
 import '../repositories/fridge_repository.dart';
 import '../repositories/user_repository.dart';
 import 'fcm_service.dart';
+import 'notification_settings_service.dart';
 
 class AuthService {
   AuthService._();
@@ -52,8 +53,8 @@ class AuthService {
         name: '$nickname의 냉장고',
       );
 
-      // 가입 후 알림 토큰 등록
-      FcmService.registerForUser();
+      // 가입 후 저장된 알림 설정에 따라 등록
+      NotificationSettingsService.applyOnLogin();
 
       return null;
     } on FirebaseAuthException catch (e) {
@@ -83,8 +84,8 @@ class AuthService {
         email: email,
         password: password,
       );
-      // 로그인 후 알림 토큰 등록
-      FcmService.registerForUser();
+      // 로그인 후 저장된 알림 설정에 따라 등록
+      NotificationSettingsService.applyOnLogin();
       return true;
     } on FirebaseAuthException {
       return false;

@@ -8,6 +8,7 @@ import '../theme/app_colors.dart';
 import '../widgets/bottom_nav.dart';
 import 'ingredient_list_screen.dart';
 import 'notification_screen.dart';
+import 'ocr_screen.dart';
 import 'recipe_detail_screen.dart';
 import 'settings_screen.dart';
 
@@ -71,9 +72,11 @@ class _HomeScreenState extends State<HomeScreen> {
       Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) => const IngredientListScreen(),
+          builder: (_) => IngredientListScreen(initialKeyword: keyword),
         ),
       );
+      // 결과 화면 이동 후 입력 초기화
+      searchController.clear();
       return;
     }
 
@@ -253,42 +256,162 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Color ddayColor(int dday) {
+    if (dday < 0) return AppColors.warningRed;
+    if (dday <= 1) return AppColors.warningRed;
+    if (dday <= 3) return AppColors.orange;
+    return AppColors.mainGreen;
+  }
+
   Widget expiringCard(List<Ingredient> items) {
     if (items.isEmpty) {
       return Container(
         width: double.infinity,
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(16),
         ),
-        child: const Text('유통기한이 임박한 식재료가 없습니다.'),
+        child: Row(
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: AppColors.mainGreen.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(Icons.check_circle_outline,
+                  color: AppColors.mainGreen),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Text(
+                '임박한 식재료가 없어요',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: AppColors.textMain,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        ),
       );
     }
 
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+    // 임박순 정렬(D-day 작은 순) + 상위 3개
+    final sorted = [...items]..sort((a, b) => a.dday.compareTo(b.dday));
+    final top = sorted.take(3).toList();
+    final extra = sorted.length - top.length;
+
+    return GestureDetector(
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const NotificationScreen()),
+        );
+      },
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Column(
+          children: [
+            for (int i = 0; i < top.length; i++) ...[
+              _expiringRow(top[i]),
+              if (i < top.length - 1)
+                const Divider(height: 1, color: Color(0xFFEFEFEF)),
+            ],
+            if (extra > 0)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      '외 $extra개 더 보기',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textSub,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(width: 2),
+                    const Icon(Icons.chevron_right,
+                        size: 16, color: AppColors.textSub),
+                  ],
+                ),
+              ),
+          ],
+        ),
       ),
+    );
+  }
+
+  Widget _expiringRow(Ingredient item) {
+    final color = ddayColor(item.dday);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
       child: Row(
         children: [
           Container(
-            width: 50,
-            height: 50,
+            width: 36,
+            height: 36,
             decoration: BoxDecoration(
-              color: AppColors.orange.withValues(alpha: 0.2),
-              borderRadius: BorderRadius.circular(12),
+              color: color.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(10),
             ),
-            child: const Icon(Icons.warning, color: AppColors.orange),
+            child: Center(
+              child: Text(
+                item.emoji ?? '🍽',
+                style: const TextStyle(fontSize: 18),
+              ),
+            ),
           ),
           const SizedBox(width: 12),
           Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  item.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textMain,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '${item.count}개',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: AppColors.textSub,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(20),
+            ),
             child: Text(
-              items.map((item) => '${item.name} ${item.count}개 (${item.ddayLabel})').join('\n'),
-              style: const TextStyle(fontSize: 14),
+              item.ddayLabel,
+              style: TextStyle(
+                color: color,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
         ],
@@ -315,20 +438,59 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         child: Row(
           children: [
-            const Icon(Icons.restaurant, color: Colors.white),
-            const SizedBox(width: 10),
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(Icons.restaurant_menu,
+                  color: Colors.white, size: 22),
+            ),
+            const SizedBox(width: 12),
             Expanded(
-              child: Text(
-                '${recipe.title} 추천!',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 15,
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '오늘의 추천',
+                    style: TextStyle(
+                      color: Color(0xCCFFFFFF),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.3,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    recipe.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
               ),
             ),
-            Text(
-              recipe.time,
-              style: const TextStyle(color: Colors.white),
+            const SizedBox(width: 8),
+            Row(
+              children: [
+                const Icon(Icons.schedule,
+                    color: Colors.white, size: 14),
+                const SizedBox(width: 4),
+                Text(
+                  recipe.time,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
             ),
           ],
         ),
@@ -342,11 +504,20 @@ class _HomeScreenState extends State<HomeScreen> {
       backgroundColor: AppColors.background,
       bottomNavigationBar: const BottomNav(currentIndex: 2),
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
+        child: RefreshIndicator(
+          onRefresh: () async {
+            await loadFridges();
+            if (!mounted) return;
+            setState(() {
+              dataKey = UniqueKey();
+            });
+          },
+          child: SingleChildScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -517,9 +688,49 @@ class _HomeScreenState extends State<HomeScreen> {
                   final recipes = snapshot.data ?? [];
 
                   if (recipes.isEmpty) {
-                    return const Text(
-                      '식재료를 등록하면 추천 레시피가 표시됩니다.',
-                      style: TextStyle(color: AppColors.textSub),
+                    return Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(18),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Text(
+                            '식재료를 등록하면 추천 레시피가 표시됩니다.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: AppColors.textSub),
+                          ),
+                          const SizedBox(height: 12),
+                          GestureDetector(
+                            onTap: () {
+                              Navigator.pushReplacement(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => const OcrScreen(),
+                                ),
+                              );
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 18, vertical: 10),
+                              decoration: BoxDecoration(
+                                color: AppColors.mainGreen,
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: const Text(
+                                '식재료 등록하러 가기',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     );
                   }
 
@@ -530,6 +741,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ],
           ),
+        ),
         ),
       ),
     );

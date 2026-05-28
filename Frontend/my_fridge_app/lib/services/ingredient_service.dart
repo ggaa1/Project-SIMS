@@ -5,6 +5,7 @@ import '../models/user_profile.dart';
 import '../repositories/fridge_repository.dart';
 import '../repositories/ingredient_repository.dart';
 import '../repositories/user_repository.dart';
+import 'recipe_service.dart';
 import 'storage_service.dart';
 
 /// 식재료 처리 서비스
@@ -119,6 +120,9 @@ class IngredientService {
       // 실패해도 식재료는 유지
     }
 
+    // 식재료 구성이 바뀌었으니 추천 캐시 무효화
+    RecipeService.invalidateRecommendCache();
+
     return ingredient;
   }
 
@@ -148,6 +152,9 @@ class IngredientService {
       imageURL: imageURL,
     );
 
+    // 식재료 구성이 바뀌었으니 추천 캐시 무효화
+    RecipeService.invalidateRecommendCache();
+
     return ingredient.copyWith(imageURL: imageURL);
   }
 
@@ -161,6 +168,8 @@ class IngredientService {
       fridgeId: fridgeId,
       ingredientId: id,
     );
+    // 식재료 구성이 바뀌었으니 추천 캐시 무효화
+    RecipeService.invalidateRecommendCache();
   }
 
   /// 식재료 검색
