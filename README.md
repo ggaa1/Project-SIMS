@@ -63,3 +63,139 @@
 - **이메일/비밀번호 로그인**: Firebase Authentication 기반 인증 시스템입니다.
 - **자동 로그인**: 앱 시작 시 기존 로그인 상태를 유지합니다.
 - **회원가입 시 냉장고 자동 생성**: 가입 즉시 개인 냉장고가 만들어집니다.
+
+- ## 🛠 기술 스택 (Tech Stack)
+ 
+| 구분 | 내용 |
+|---|---|
+| **Mobile Framework** | [Flutter](https://flutter.dev/) / [Dart](https://dart.dev/) |
+| **State Management** | `setState`, `StatefulWidget` |
+| **Backend** | [FastAPI](https://fastapi.tiangolo.com/) (Python 3.11), Render.com 배포 |
+| **Serverless** | Firebase Cloud Functions v2 (Node.js 24) |
+| **Database** | [Cloud Firestore](https://firebase.google.com/docs/firestore) (실시간 동기화) |
+| **Authentication** | [Firebase Authentication](https://firebase.google.com/docs/auth) |
+| **Storage** | [Firebase Storage](https://firebase.google.com/docs/storage) (식재료 이미지) |
+| **Push Notification** | [Firebase Cloud Messaging (FCM)](https://firebase.google.com/docs/cloud-messaging) |
+| **AI/LLM** | [OpenAI GPT-4o-mini](https://openai.com/) (레시피 추천·챗봇), [Google Gemini](https://ai.google.dev/) (OCR Vision) |
+| **Flutter Packages** | `cloud_firestore`, `firebase_auth`, `firebase_storage`, `firebase_messaging`, `flutter_local_notifications`, `image_picker`, `shared_preferences` |
+| **Backend Packages** | `fastapi`, `firebase-admin`, `openai`, `google-genai`, `Pillow` |
+ 
+---
+ 
+## 📂 디렉토리 구조 (Directory Structure)
+ 
+```
+Project-SIMS/
+├── Frontend/
+│   └── my_fridge_app/          # Flutter 앱
+│       └── lib/
+│           ├── main.dart               # 앱 진입점 (Firebase 초기화, FCM 설정)
+│           ├── firebase_options.dart   # Firebase 환경 설정
+│           ├── models/                 # 데이터 모델
+│           │   ├── ingredient.dart         # 식재료 모델 (D-Day 계산 포함)
+│           │   ├── recipe.dart             # 레시피 / 레시피 기록 모델
+│           │   ├── chat_message.dart       # 채팅 메시지 / 세션 모델
+│           │   ├── ocr_result.dart         # OCR 결과 모델
+│           │   ├── user_profile.dart       # 사용자 / 냉장고 모델
+│           │   └── notification_record.dart # 알림 기록 모델
+│           ├── repositories/           # Firestore 직접 접근 레이어
+│           │   ├── ingredient_repository.dart
+│           │   ├── fridge_repository.dart
+│           │   ├── user_repository.dart
+│           │   ├── recipe_history_repository.dart
+│           │   ├── chat_repository.dart
+│           │   └── fcm_token_repository.dart
+│           ├── services/               # 비즈니스 로직
+│           │   ├── ingredient_service.dart   # 식재료 CRUD + Storage 연동
+│           │   ├── fridge_service.dart       # 냉장고 선택/공유 로직
+│           │   ├── recipe_service.dart       # 레시피 추천 (캐싱 포함)
+│           │   ├── chat_service.dart         # 챗봇 API 연동
+│           │   ├── ocr_service.dart          # OCR API 연동
+│           │   ├── auth_service.dart         # Firebase Auth 래퍼
+│           │   ├── fcm_service.dart          # FCM 토큰 관리 + 알림 처리
+│           │   ├── storage_service.dart      # Firebase Storage 업로드
+│           │   ├── notification_settings_service.dart
+│           │   ├── notification_history_service.dart
+│           │   └── user_profile_service.dart
+│           ├── screens/                # UI 화면
+│           │   ├── home_screen.dart          # 홈 (유통기한 임박 + 추천 레시피)
+│           │   ├── ocr_screen.dart           # 식재료 등록 (OCR / 직접)
+│           │   ├── ingredient_list_screen.dart
+│           │   ├── ingredient_detail_screen.dart
+│           │   ├── recipe_screen.dart        # 레시피 추천 화면
+│           │   ├── recipe_detail_screen.dart
+│           │   ├── llm_screen.dart           # AI 셰프 챗봇
+│           │   ├── notification_screen.dart
+│           │   ├── settings_screen.dart
+│           │   ├── share_fridge_screen.dart  # 냉장고 공유
+│           │   ├── login_screen.dart
+│           │   └── signup_screen.dart
+│           ├── widgets/
+│           │   └── bottom_nav.dart           # 하단 네비게이션 바
+│           └── theme/
+│               └── app_colors.dart           # 앱 컬러 팔레트
+│
+└── Backend/
+    ├── server/                 # FastAPI 백엔드 (Render.com 배포)
+    │   ├── app/
+    │   │   ├── main.py             # FastAPI 앱 + CORS + 라우터 등록
+    │   │   ├── auth.py             # Firebase ID 토큰 검증
+    │   │   ├── db.py               # Firestore 어댑터
+    │   │   ├── routers/            # API 엔드포인트
+    │   │   │   ├── health.py           # GET /healthz
+    │   │   │   ├── users.py            # GET /users/me
+    │   │   │   ├── fridges.py          # POST /fridges, GET /fridges/me, POST /fridges/join
+    │   │   │   ├── ingredients.py      # 식재료 CRUD
+    │   │   │   ├── recipes.py          # POST /recipes/recommend
+    │   │   │   ├── chat.py             # POST /chat
+    │   │   │   ├── fcm.py              # POST /fcm/register
+    │   │   │   └── tasks.py            # POST /tasks/check-expiry (cron)
+    │   │   ├── ocr/                # OCR 모듈 (Gemini Vision)
+    │   │   │   ├── router.py
+    │   │   │   ├── gemini.py
+    │   │   │   ├── service.py
+    │   │   │   └── preprocess.py
+    │   │   ├── schemas/            # Pydantic 모델 (CamelModel)
+    │   │   └── services/
+    │   │       └── llm_service.py  # OpenAI 챗봇 + 레시피 추천
+    │   ├── docs/
+    │   │   ├── api-v1.md           # API 명세
+    │   │   └── schema-v1.md        # Firestore 스키마 v2
+    │   ├── Dockerfile
+    │   ├── render.yaml             # Render Blueprint (자동 배포)
+    │   └── requirements.txt
+    │
+    ├── functions/              # Firebase Cloud Functions (Node.js 24)
+    │   ├── index.js                # 유통기한 알림 스케줄러 (매일 KST 09:00)
+    │   └── package.json
+    │
+    └── ocr/                    # 독립 OCR 서버 (개발/테스트용)
+        ├── main.py
+        ├── router.py
+        ├── gemini.py
+        ├── service.py
+        └── requirements.txt
+```
+ 
+
+ 
+## 📝 개발 현황
+ 
+- [V] **기본 인프라**: Firebase Auth, Firestore, Storage, FCM 연동 완료
+- [V] **회원가입/로그인**: Firebase Authentication 구현 완료
+- [V] **냉장고 관리**: CRUD, D-Day 시각화, 이미지 업로드 구현 완료
+- [V] **냉장고 공유**: 초대 코드 기반 멤버 초대 시스템 구현 완료
+- [V] **OCR 식재료 등록**: Gemini Vision 영수증/실물 사진 인식 구현 완료
+- [V] **AI 레시피 추천**: OpenAI GPT-4o-mini 기반 추천 + 추천 캐싱 구현 완료
+- [V] **AI 셰프 챗봇**: 멀티턴 대화 + 레시피 컨텍스트 연계 구현 완료
+- [V] **알림 시스템**: FCM 로컬/클라우드 알림 + Cloud Functions 스케줄러 구현 완료
+- [V] **백엔드 배포**: FastAPI → Render.com Docker 배포 완료
+---
+ 
+## 👥 Contributors
+- **Developer**:
+  - 기세웅(팀장) (2071045) 
+  - 고범창 (2171346) 
+  - 김규섭 (2071288) 
+  - 김진오 (2071358) 
+  - 이윤수 (2171120) 
