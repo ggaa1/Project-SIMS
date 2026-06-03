@@ -81,7 +81,16 @@
 | **Backend Packages** | `fastapi`, `firebase-admin`, `openai`, `google-genai`, `Pillow` |
  
 ---
- 
+## 🏗 프로젝트 구조도
+
+> Flutter + FastAPI(Render) + Firebase + 외부 AI 연동
+
+![시스템 구조도](https://github.com/user-attachments/assets/3334a136-0ddd-4da0-89eb-516baaa208b6)
+
+- **실선**: 동기 통신  
+- **점선**: Firebase 연동  
+- **화살표 방향**: 데이터 흐름
+-
 ## 📂 디렉토리 구조 (Directory Structure)
  
 ```
