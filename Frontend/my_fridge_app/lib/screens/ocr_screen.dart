@@ -32,6 +32,7 @@ class _OcrScreenState extends State<OcrScreen> {
   RegisterMode mode = RegisterMode.none;
   bool hasScanned = false;
   bool isAnalyzing = false;
+  bool isRegistering = false;
   bool showCompleteMessage = false;
   String? ocrError;
   XFile? pickedImage;
@@ -203,21 +204,30 @@ class _OcrScreenState extends State<OcrScreen> {
 
   // 직접 등록
   Future<void> registerManualIngredient() async {
+    // 중복 탭/연타 가드
+    if (isRegistering) return;
     if (!(_manualFormKey.currentState?.validate() ?? false)) return;
+
+    setState(() => isRegistering = true);
 
     final expireDateStr = _expireDateController.text.trim();
     final expireDate = DateTime.tryParse(expireDateStr) ?? DateTime.now();
 
-    await IngredientService.addIngredient(
-      name: _nameController.text.trim(),
-      category: _selectedCategory,
-      emoji: emojiForCategory(_selectedCategory),
-      count: int.tryParse(_countController.text.trim()) ?? 1,
-      expireDate: expireDate,
-      imageLocalPath: pickedImage?.path,
-      addedVia: IngredientSource.manual,
-    );
+    try {
+      await IngredientService.addIngredient(
+        name: _nameController.text.trim(),
+        category: _selectedCategory,
+        emoji: emojiForCategory(_selectedCategory),
+        count: int.tryParse(_countController.text.trim()) ?? 1,
+        expireDate: expireDate,
+        imageLocalPath: pickedImage?.path,
+        addedVia: IngredientSource.manual,
+      );
+    } finally {
+      if (mounted) setState(() => isRegistering = false);
+    }
 
+    if (!mounted) return;
     setState(() {
       showCompleteMessage = true;
       _nameController.clear();
@@ -238,6 +248,9 @@ class _OcrScreenState extends State<OcrScreen> {
   }
 
   Future<void> registerIngredient() async {
+    // 중복 탭/연타 가드: 이미 등록 중이면 무시.
+    // 이게 없으면 같은 itemsToSave로 등록 루프가 N번 돌아 같은 항목이 중복 저장됨.
+    if (isRegistering) return;
     if (AuthService.currentUser == null) return;
     final itemsToSave = draftItems
         .where((item) => item.name.trim().isNotEmpty)
@@ -250,22 +263,29 @@ class _OcrScreenState extends State<OcrScreen> {
       return;
     }
 
-    final String source = mode == RegisterMode.receipt 
-        ? IngredientSource.receipt 
+    setState(() => isRegistering = true);
+
+    final String source = mode == RegisterMode.receipt
+        ? IngredientSource.receipt
         : IngredientSource.image;
 
-    for (final item in itemsToSave) {
-      await IngredientService.addIngredient(
-        name: item.name.trim(),
-        category: item.category,
-        emoji: emojiForCategory(item.category),
-        count: item.count,
-        expireDate: item.expireDate,
-        imageLocalPath: pickedImage?.path,
-        addedVia: source,
-      );
+    try {
+      for (final item in itemsToSave) {
+        await IngredientService.addIngredient(
+          name: item.name.trim(),
+          category: item.category,
+          emoji: emojiForCategory(item.category),
+          count: item.count,
+          expireDate: item.expireDate,
+          imageLocalPath: pickedImage?.path,
+          addedVia: source,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => isRegistering = false);
     }
 
+    if (!mounted) return;
     setState(() {
       showCompleteMessage = true;
     });
@@ -948,19 +968,29 @@ class _OcrScreenState extends State<OcrScreen> {
 
   Widget registerButton() {
     return GestureDetector(
-      onTap: registerIngredient,
+      onTap: isRegistering ? null : registerIngredient,
       child: Container(
         width: double.infinity,
         height: 52,
         decoration: BoxDecoration(
-          color: AppColors.mainGreen,
+          color: isRegistering ? Colors.grey : AppColors.mainGreen,
           borderRadius: BorderRadius.circular(14),
         ),
-        child: const Center(
-          child: Text(
-            '식재료 등록하기',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-          ),
+        child: Center(
+          child: isRegistering
+              ? const SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+              : const Text(
+                  '식재료 등록하기',
+                  style: TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold),
+                ),
         ),
       ),
     );
@@ -968,19 +998,29 @@ class _OcrScreenState extends State<OcrScreen> {
 
   Widget registerManualButton() {
     return GestureDetector(
-      onTap: registerManualIngredient,
+      onTap: isRegistering ? null : registerManualIngredient,
       child: Container(
         width: double.infinity,
         height: 52,
         decoration: BoxDecoration(
-          color: AppColors.mainGreen,
+          color: isRegistering ? Colors.grey : AppColors.mainGreen,
           borderRadius: BorderRadius.circular(14),
         ),
-        child: const Center(
-          child: Text(
-            '직접 등록하기',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-          ),
+        child: Center(
+          child: isRegistering
+              ? const SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+              : const Text(
+                  '직접 등록하기',
+                  style: TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold),
+                ),
         ),
       ),
     );
