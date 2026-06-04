@@ -13,8 +13,24 @@ from app.schemas.fridges import (
     FridgeJoinResponse,
     FridgeListResponse,
 )
+from app.schemas.shelf_life import CategoryShelfLifeItem, ShelfLifePatch
+from app.services import shelf_life
 
 router = APIRouter(prefix="/fridges", tags=["fridges"])
+
+
+def _verify_member(fridge_id: str, uid: str) -> Dict[str, Any]:
+    """fridge 존재 + 멤버 확인. 통과하면 fridge dict 반환."""
+    snap = db.fridges_col().document(fridge_id).get()
+    if not snap.exists:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fridge not found")
+    data = snap.to_dict() or {}
+    if uid not in (data.get("memberUids") or []):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="이 냉장고의 멤버가 아닙니다.",
+        )
+    return data
 
 
 # Frontend fridge_repository.dart 와 동일한 알파벳 (I, O, 0, 1 제외).
@@ -209,3 +225,61 @@ def join_fridge(
         updated_at=now,
     )
     return FridgeJoinResponse(fridge=fridge, joined_as=user.uid)
+
+
+# ─── 카테고리별 표준 유통기한 (expiry-spec-v1.md §5) ──────────────────
+@router.get(
+    "/{fridge_id}/category-shelf-life",
+    response_model=List[CategoryShelfLifeItem],
+    summary="카테고리별 표준 보관일수 (전역+냉장고 override 머지, 12종)",
+)
+def get_category_shelf_life(
+    fridge_id: str,
+    user: CurrentUser = Depends(get_current_user),
+) -> List[CategoryShelfLifeItem]:
+    fridge = _verify_member(fridge_id, user.uid)
+    return [CategoryShelfLifeItem(**row) for row in shelf_life.merged_list(fridge)]
+
+
+@router.patch(
+    "/{fridge_id}/category-shelf-life",
+    response_model=List[CategoryShelfLifeItem],
+    summary="냉장고 override 수정 (변경분만, null이면 기본값 복귀)",
+)
+def patch_category_shelf_life(
+    fridge_id: str,
+    body: ShelfLifePatch,
+    user: CurrentUser = Depends(get_current_user),
+) -> List[CategoryShelfLifeItem]:
+    fridge = _verify_member(fridge_id, user.uid)
+
+    changes = body.root or {}
+    # 현재 override 맵을 read-modify-write (키에 '/'가 있어 field-path 갱신 회피).
+    current: Dict[str, int] = dict(fridge.get("categoryShelfLife") or {})
+    for cat, val in changes.items():
+        if cat not in shelf_life.CATEGORIES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"허용되지 않은 카테고리: {cat}",
+            )
+        if val is None:
+            current.pop(cat, None)  # 기본값 복귀
+            continue
+        if not isinstance(val, int) or isinstance(val, bool):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{cat}: 일수는 정수여야 합니다.",
+            )
+        if not (shelf_life.MIN_DAYS <= val <= shelf_life.MAX_DAYS):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{cat}: 일수는 {shelf_life.MIN_DAYS}~{shelf_life.MAX_DAYS} 범위여야 합니다.",
+            )
+        current[cat] = val
+
+    db.fridges_col().document(fridge_id).update({
+        "categoryShelfLife": current,
+        "updatedAt": db.utcnow(),
+    })
+    fridge["categoryShelfLife"] = current
+    return [CategoryShelfLifeItem(**row) for row in shelf_life.merged_list(fridge)]

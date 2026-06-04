@@ -6,20 +6,36 @@ items 리스트를 사용자 확인 후 /fridges/{fid}/ingredients 로 일괄 �
 """
 from __future__ import annotations
 
-from typing import Literal
+from datetime import datetime
+from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from google.genai.errors import APIError as GeminiAPIError
 from PIL import UnidentifiedImageError
 from pydantic import BaseModel, Field, ValidationError
 
+from app import db
 from app.auth import CurrentUser, get_current_user
-from app.ocr.gemini import Item
 from app.ocr.preprocess import preprocess_common
 from app.ocr.service import process_image
+from app.services import shelf_life
 
 
 router = APIRouter(prefix="/ocr", tags=["ocr"])
+
+
+def _load_fridge_for_member(fridge_id: str, uid: str) -> Dict[str, Any]:
+    """fridge_id 가 주어지면 존재+멤버 확인 후 fridge dict 반환(override 적용용)."""
+    snap = db.fridges_col().document(fridge_id).get()
+    if not snap.exists:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fridge not found")
+    data = snap.to_dict() or {}
+    if uid not in (data.get("memberUids") or []):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="이 냉장고의 멤버가 아닙니다.",
+        )
+    return data
 
 
 _ALLOWED_TYPES = {
@@ -33,15 +49,30 @@ _ALLOWED_TYPES = {
 _MAX_BYTES = 10 * 1024 * 1024  # 10MB
 
 
+class OcrResultItem(BaseModel):
+    """OCR 추출 결과 1건 + 서버 산정 추천 만료일.
+
+    expire_date 는 카테고리 표준 보관일수(냉장고 override 반영) × coefficient 로
+    server 가 계산한 추천값. 사용자가 확인 화면에서 수정 후 저장한다.
+    """
+
+    category: str
+    name: str
+    quantity: str
+    coefficient: float = Field(description="유통기한 계수(OCR 산출). 참고용.")
+    expire_date: datetime = Field(description="서버 산정 추천 만료일 (KST 날짜의 UTC).")
+
+
 class OcrTextResponse(BaseModel):
     source_kind: Literal["receipt", "object"] = Field(
         description='이미지 분류 결과. "receipt" 면 영수증, "object" 면 실물 사진(식재료/제품).',
         examples=["receipt"],
     )
-    items: list[Item] = Field(
+    items: List[OcrResultItem] = Field(
         description=(
-            "추출된 식재료/품목 목록. 양쪽 분기 모두 동일 스키마 — {category, name, quantity}. "
-            "frontend 는 사용자에게 이 리스트를 보여주고 수정/확정받는 UX 권장."
+            "추출된 식재료/품목 목록. {category, name, quantity, coefficient, expire_date}. "
+            "expire_date 는 server 가 카테고리 표준 보관일수×계수로 산정한 추천 만료일. "
+            "frontend 는 이 리스트를 사용자에게 보여주고 수정/확정받는 UX 권장."
         ),
     )
     model: str = Field(
@@ -71,6 +102,10 @@ class OcrTextResponse(BaseModel):
 )
 async def ocr_text(
     file: UploadFile = File(..., description="처리할 이미지 (jpeg/png/webp/heic/heif, ≤10MB)"),
+    fridge_id: Optional[str] = Form(
+        None,
+        description="대상 냉장고 ID. 주면 해당 냉장고의 override 보관일수를 만료일 산정에 반영.",
+    ),
     user: CurrentUser = Depends(get_current_user),
 ) -> OcrTextResponse:
     if file.content_type not in _ALLOWED_TYPES:
@@ -117,8 +152,27 @@ async def ocr_text(
             detail=f"Gemini empty/unparseable response: {exc}",
         ) from exc
 
+    # 냉장고 override 적용용. fridge_id 없으면 전역 기본값만으로 산정.
+    fridge_data: Optional[Dict[str, Any]] = None
+    if fridge_id:
+        fridge_data = _load_fridge_for_member(fridge_id, user.uid)
+
+    now = db.utcnow()
+    items = [
+        OcrResultItem(
+            category=item.category,
+            name=item.name,
+            quantity=item.quantity,
+            coefficient=item.coefficient,
+            expire_date=shelf_life.compute_expire_date(
+                item.category, item.coefficient, fridge_data, now,
+            ),
+        )
+        for item in result.items
+    ]
+
     return OcrTextResponse(
         source_kind=result.source_kind,
-        items=result.items,
+        items=items,
         model=result.model,
     )

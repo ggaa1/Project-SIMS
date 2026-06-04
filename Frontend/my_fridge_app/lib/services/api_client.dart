@@ -79,6 +79,22 @@ class ApiClient {
     );
   }
 
+  /// JSON PATCH.
+  static Future<String> patchJson(
+    String path, {
+    Map<String, dynamic>? body,
+    Duration timeout = const Duration(seconds: 60),
+    bool requireAuth = true,
+  }) {
+    return _request(
+      method: 'PATCH',
+      path: path,
+      body: body,
+      timeout: timeout,
+      requireAuth: requireAuth,
+    );
+  }
+
   /// multipart/form-data 업로드. body는 파일 스트림과 함께 직접 작성.
   /// OCR처럼 큰 페이로드는 별도 헬퍼 대신 이 메서드로 처리.
   static Future<String> postMultipart(
@@ -87,6 +103,7 @@ class ApiClient {
     required String fileName,
     required String mimeType,
     String fieldName = 'file',
+    Map<String, String>? fields,
     Duration timeout = const Duration(seconds: 60),
     bool requireAuth = true,
   }) async {
@@ -106,6 +123,17 @@ class ApiClient {
       HttpHeaders.contentTypeHeader,
       'multipart/form-data; boundary=$boundary',
     );
+
+    // 텍스트 필드(예: fridge_id) — 파일 파트보다 먼저 작성.
+    if (fields != null) {
+      fields.forEach((name, value) {
+        request.add(utf8.encode('--$boundary\r\n'));
+        request.add(utf8.encode(
+          'Content-Disposition: form-data; name="$name"\r\n\r\n',
+        ));
+        request.add(utf8.encode('$value\r\n'));
+      });
+    }
 
     final safeFileName = fileName.replaceAll(RegExp(r'[^\x20-\x7E]'), '_');
     request.add(utf8.encode('--$boundary\r\n'));
