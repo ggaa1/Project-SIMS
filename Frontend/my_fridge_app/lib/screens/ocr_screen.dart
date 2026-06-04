@@ -5,6 +5,7 @@ import 'package:image_picker/image_picker.dart';
 import '../models/ingredient.dart';
 import '../models/ocr_result.dart';
 import '../services/auth_service.dart';
+import '../services/category_shelf_life_service.dart';
 import '../services/ingredient_service.dart';
 import '../services/ocr_service.dart';
 import '../theme/app_colors.dart';
@@ -24,23 +25,20 @@ class _OcrScreenState extends State<OcrScreen> {
   final _nameController = TextEditingController();
   final _countController = TextEditingController(text: '1');
   final _expireDateController = TextEditingController();
-
+  
   // 기본 카테고리
-  String _selectedCategory = IngredientCategory.vegetable;
-
+  String _selectedCategory = IngredientCategory.vegetable; 
+  
   RegisterMode mode = RegisterMode.none;
   bool hasScanned = false;
   bool isAnalyzing = false;
-  bool isRegistering = false;
   bool showCompleteMessage = false;
   String? ocrError;
-  String analyzingStage = '이미지를 분석하고 있어요…';
   XFile? pickedImage;
   List<OcrDraftItem> draftItems = [];
 
-  // 카메라/앨범 원본은 종종 5~15MB. 백엔드 한도 10MB + Gemini 처리 속도 위해 사전 압축.
-  static const int _pickMaxWidth = 1920;
-  static const int _pickImageQuality = 85;
+  // 수동 추가용: 카테고리 → effective 보관일수 (자동입력 기준). 비어있으면 자동입력 생략.
+  Map<String, int> _categoryDays = {};
 
   // 카테고리 목록
   static const List<String> _categories = IngredientCategory.all;
@@ -55,12 +53,7 @@ class _OcrScreenState extends State<OcrScreen> {
 
   Future<void> pickImage(RegisterMode selectedMode, ImageSource source) async {
     final picker = ImagePicker();
-    final image = await picker.pickImage(
-      source: source,
-      // 업로드 페이로드를 1~2MB 수준으로 줄여 백엔드 10MB 한도 + 분석 속도 개선
-      maxWidth: _pickMaxWidth.toDouble(),
-      imageQuality: _pickImageQuality,
-    );
+    final image = await picker.pickImage(source: source);
 
     if (image == null) return;
 
@@ -69,7 +62,6 @@ class _OcrScreenState extends State<OcrScreen> {
       pickedImage = image;
       hasScanned = true;
       isAnalyzing = true;
-      analyzingStage = '이미지를 분석하고 있어요…';
       draftItems = [];
       ocrError = null;
       showCompleteMessage = false;
@@ -80,46 +72,28 @@ class _OcrScreenState extends State<OcrScreen> {
 
   Future<void> analyzePickedImage(String imagePath) async {
     try {
-      final result = await OcrService.analyzeImage(
-        imagePath,
-        onStage: (stage) {
-          if (!mounted) return;
-          setState(() => analyzingStage = stage);
-        },
-      );
+      final result = await OcrService.analyzeImage(imagePath);
 
       if (!mounted) return;
 
       setState(() {
         draftItems = result.items;
         isAnalyzing = false;
-        ocrError = draftItems.isEmpty
-            ? '인식된 식재료가 없어요. 더 선명한 사진으로 다시 시도해보세요.'
-            : null;
-      });
-    } on OcrException catch (e) {
-      if (!mounted) return;
-      setState(() {
-        isAnalyzing = false;
-        ocrError = e.message;
+        ocrError = draftItems.isEmpty ? '인식된 식재료가 없습니다. 다시 선택해주세요.' : null;
       });
     } catch (_) {
       if (!mounted) return;
 
       setState(() {
         isAnalyzing = false;
-        ocrError = '이미지 분석에 실패했어요. 잠시 후 다시 시도해주세요.';
+        ocrError = '이미지 분석에 실패했습니다. 다시 시도해주세요.';
       });
     }
   }
 
   Future<void> pickManualImage() async {
     final picker = ImagePicker();
-    final image = await picker.pickImage(
-      source: ImageSource.gallery,
-      maxWidth: _pickMaxWidth.toDouble(),
-      imageQuality: _pickImageQuality,
-    );
+    final image = await picker.pickImage(source: ImageSource.gallery);
 
     if (image == null) return;
 
@@ -180,7 +154,7 @@ class _OcrScreenState extends State<OcrScreen> {
     });
   }
 
-  void openManualForm() {
+  Future<void> openManualForm() async {
     setState(() {
       mode = RegisterMode.manual;
       pickedImage = null;
@@ -190,6 +164,28 @@ class _OcrScreenState extends State<OcrScreen> {
       ocrError = null;
       showCompleteMessage = false;
     });
+
+    // 카테고리별 기본 보관일수를 받아 선택 카테고리의 유통기한을 자동 입력.
+    // 실패해도 수동 입력은 그대로 진행(사용자가 직접 날짜 선택).
+    try {
+      final fridgeId = await IngredientService.currentFridgeId();
+      final map = await CategoryShelfLifeService.effectiveDaysMap(fridgeId);
+      if (!mounted) return;
+      setState(() => _categoryDays = map);
+      _autofillExpireForCategory(_selectedCategory);
+    } catch (_) {
+      // 무시 — 자동입력만 생략
+    }
+  }
+
+  /// 선택된 카테고리의 effective 보관일수로 유통기한 필드를 채운다(사용자 수정 가능).
+  void _autofillExpireForCategory(String category) {
+    final days = _categoryDays[category];
+    if (days == null) return;
+    final d = DateTime.now().add(Duration(days: days));
+    _expireDateController.text = '${d.year.toString().padLeft(4, '0')}-'
+        '${d.month.toString().padLeft(2, '0')}-'
+        '${d.day.toString().padLeft(2, '0')}';
   }
 
   String emojiForCategory(String category) {
@@ -242,8 +238,6 @@ class _OcrScreenState extends State<OcrScreen> {
   }
 
   Future<void> registerIngredient() async {
-    // 중복 탭/연타 가드: 이미 등록 중이면 무시
-    if (isRegistering) return;
     if (AuthService.currentUser == null) return;
     final itemsToSave = draftItems
         .where((item) => item.name.trim().isNotEmpty)
@@ -256,31 +250,22 @@ class _OcrScreenState extends State<OcrScreen> {
       return;
     }
 
-    setState(() => isRegistering = true);
-
-    final String source = mode == RegisterMode.receipt
-        ? IngredientSource.receipt
+    final String source = mode == RegisterMode.receipt 
+        ? IngredientSource.receipt 
         : IngredientSource.image;
 
-    try {
-      for (final item in itemsToSave) {
-        await IngredientService.addIngredient(
-          name: item.name.trim(),
-          category: item.category,
-          emoji: emojiForCategory(item.category),
-          count: item.count,
-          expireDate: item.expireDate,
-          imageLocalPath: pickedImage?.path,
-          addedVia: source,
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => isRegistering = false);
-      }
+    for (final item in itemsToSave) {
+      await IngredientService.addIngredient(
+        name: item.name.trim(),
+        category: item.category,
+        emoji: emojiForCategory(item.category),
+        count: item.count,
+        expireDate: item.expireDate,
+        imageLocalPath: pickedImage?.path,
+        addedVia: source,
+      );
     }
 
-    if (!mounted) return;
     setState(() {
       showCompleteMessage = true;
     });
@@ -321,18 +306,11 @@ class _OcrScreenState extends State<OcrScreen> {
 
   Widget getResultText() {
     if (isAnalyzing) {
-      return Column(
+      return const Column(
         children: [
-          const CircularProgressIndicator(),
-          const SizedBox(height: 12),
-          Text(
-            analyzingStage,
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: AppColors.textSub,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
+          CircularProgressIndicator(),
+          SizedBox(height: 12),
+          Text('이미지를 분석하고 있습니다.', style: TextStyle(color: AppColors.textSub)),
         ],
       );
     }
@@ -341,10 +319,7 @@ class _OcrScreenState extends State<OcrScreen> {
       return Text(
         ocrError!,
         textAlign: TextAlign.center,
-        style: const TextStyle(
-          color: AppColors.warningRed,
-          fontWeight: FontWeight.w600,
-        ),
+        style: const TextStyle(color: AppColors.warningRed),
       );
     }
 
@@ -663,12 +638,9 @@ class _OcrScreenState extends State<OcrScreen> {
 
   Widget scannedResultView() {
     return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
-      child: ConstrainedBox(
-        // 작은 폰(360dp)에선 가용 폭 전체 사용, 태블릿/큰 폰에선 최대 420dp로 제한
-        constraints: const BoxConstraints(maxWidth: 420),
-        child: Container(
-        width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 18),
+      child: Container(
+        width: 310,
         padding: const EdgeInsets.all(18),
         decoration: BoxDecoration(
           color: Colors.white,
@@ -712,7 +684,6 @@ class _OcrScreenState extends State<OcrScreen> {
               ),
           ],
         ),
-      ),
       ),
     );
   }
@@ -763,6 +734,7 @@ class _OcrScreenState extends State<OcrScreen> {
                   setState(() {
                     _selectedCategory = value;
                   });
+                  _autofillExpireForCategory(value);
                 },
               ),
               const SizedBox(height: 14),
@@ -976,29 +948,19 @@ class _OcrScreenState extends State<OcrScreen> {
 
   Widget registerButton() {
     return GestureDetector(
-      onTap: isRegistering ? null : registerIngredient,
+      onTap: registerIngredient,
       child: Container(
         width: double.infinity,
         height: 52,
         decoration: BoxDecoration(
-          color: isRegistering ? Colors.grey : AppColors.mainGreen,
+          color: AppColors.mainGreen,
           borderRadius: BorderRadius.circular(14),
         ),
-        child: Center(
-          child: isRegistering
-              ? const SizedBox(
-                  width: 22,
-                  height: 22,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: Colors.white,
-                  ),
-                )
-              : const Text(
-                  '식재료 등록하기',
-                  style: TextStyle(
-                      color: Colors.white, fontWeight: FontWeight.bold),
-                ),
+        child: const Center(
+          child: Text(
+            '식재료 등록하기',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          ),
         ),
       ),
     );
@@ -1006,29 +968,19 @@ class _OcrScreenState extends State<OcrScreen> {
 
   Widget registerManualButton() {
     return GestureDetector(
-      onTap: isRegistering ? null : registerManualIngredient,
+      onTap: registerManualIngredient,
       child: Container(
         width: double.infinity,
         height: 52,
         decoration: BoxDecoration(
-          color: isRegistering ? Colors.grey : AppColors.mainGreen,
+          color: AppColors.mainGreen,
           borderRadius: BorderRadius.circular(14),
         ),
-        child: Center(
-          child: isRegistering
-              ? const SizedBox(
-                  width: 22,
-                  height: 22,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: Colors.white,
-                  ),
-                )
-              : const Text(
-                  '직접 등록하기',
-                  style: TextStyle(
-                      color: Colors.white, fontWeight: FontWeight.bold),
-                ),
+        child: const Center(
+          child: Text(
+            '직접 등록하기',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          ),
         ),
       ),
     );

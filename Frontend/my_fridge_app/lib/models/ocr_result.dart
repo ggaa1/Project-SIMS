@@ -4,11 +4,16 @@ class OcrDraftItem {
   String quantity;
   DateTime expireDate;
 
+  /// 유통기한 계수 (OCR 산출, 기본 1.0). 카테고리 표준 보관일수에 곱해
+  /// 만료일을 산정할 때 사용. expiry-spec-v1.md §4.1
+  double coefficient;
+
   OcrDraftItem({
     required this.name,
     required this.category,
     required this.quantity,
     DateTime? expireDate,
+    this.coefficient = 1.0,
   }) : expireDate = expireDate ??
             DateTime.now().add(const Duration(days: 7));
 
@@ -25,10 +30,20 @@ class OcrDraftItem {
   factory OcrDraftItem.fromJson(Map<String, dynamic> json) {
     final rawQuantity = json['quantity'];
     final rawExpire = json['expireDate'] ?? json['expire_date'];
+    final rawCoef = json['coefficient'];
 
     DateTime? parsedExpire;
     if (rawExpire is String && rawExpire.isNotEmpty) {
-      parsedExpire = DateTime.tryParse(rawExpire);
+      // 서버는 UTC instant(KST 자정 환산)로 보냄 → 로컬(KST)로 변환해야
+      // 날짜 컴포넌트가 하루 어긋나지 않는다.
+      parsedExpire = DateTime.tryParse(rawExpire)?.toLocal();
+    }
+
+    double parsedCoef = 1.0;
+    if (rawCoef is num) {
+      parsedCoef = rawCoef.toDouble();
+    } else if (rawCoef is String) {
+      parsedCoef = double.tryParse(rawCoef) ?? 1.0;
     }
 
     return OcrDraftItem(
@@ -36,6 +51,7 @@ class OcrDraftItem {
       category: json['category'] as String? ?? '기타',
       quantity: rawQuantity == null ? '1' : rawQuantity.toString(),
       expireDate: parsedExpire,
+      coefficient: parsedCoef,
     );
   }
 }

@@ -37,6 +37,11 @@ def fridges_col() -> CollectionReference:
     return client().collection("fridges")
 
 
+def app_config_col() -> CollectionReference:
+    """전역 운영 설정. categoryShelfLife(카테고리 표준 보관일수) 문서 등."""
+    return client().collection("appConfig")
+
+
 def ingredients_col(fridge_id: str) -> CollectionReference:
     return fridges_col().document(fridge_id).collection("ingredients")
 

@@ -3,7 +3,7 @@
 단일 호출 아키텍처:
 - 이미지 → Gemini Vision → response_schema 강제 JSON
 - kind 필드로 영수증/실물 분기, 응답은 양쪽 모두 {kind, items[]}
-- items 필드 통일: {category, name, quantity}. 가격·매장 정보 등은 추출 대상 아님.
+- items 필드 통일: {category, name, quantity, coefficient}. 가격·매장 정보 등은 추출 대상 아님.
 
 env vars:
 - GEMINI_API_KEY (필수)
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Literal
+from typing import Any, Literal
 
 from google import genai
 from google.genai import types
@@ -61,6 +61,11 @@ class Item(BaseModel):
     category: Category
     name: str
     quantity: str
+    # 유통기한 계수: 카테고리 표준 보관일수에 곱하는 배수. 1.0=표준, >1 오래감, <1 빨리 상함.
+    # server(shelf_life)가 expireDate 산정에 1회 사용 후 폐기. 상세: docs/expiry-spec-v1.md §4.1
+    # NOTE: 기존 필드들과 동일하게 default 없는 필수 필드로 둔다 — Gemini response_schema 에
+    # "default" 키가 새어 들어가 거부되는 것을 피하기 위함(프롬프트가 항상 채우도록 지시).
+    coefficient: float
 
     @field_validator("quantity")
     @classmethod
@@ -70,6 +75,19 @@ class Item(BaseModel):
             return ""
         m = _LEADING_DIGITS.search(v)
         return m.group(0) if m else ""
+
+    @field_validator("coefficient")
+    @classmethod
+    def _sanitize_coefficient(cls, v: Any) -> float:
+        # LLM 산출값이라 방어적으로 보정: 비숫자/NaN/inf/0이하는 1.0, 범위 밖은 0.1~10 클램프.
+        # 최종 권위 클램프는 server shelf_life(이 단계는 1차 안전망).
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return 1.0
+        if f != f or f in (float("inf"), float("-inf")) or f <= 0:
+            return 1.0
+        return min(10.0, max(0.1, f))
 
 
 class OcrResponse(BaseModel):
@@ -90,7 +108,7 @@ _PROMPT = """You receive a single image. Classify and extract structured info as
 
 [Branch 1] Korean grocery RECEIPT (printed text/POS receipt):
 - kind = "receipt"
-- items: ONLY actual product lines → {category, name (Korean verbatim), quantity}
+- items: ONLY actual product lines → {category, name (Korean verbatim), quantity, coefficient}
 - quantity: digits only as string. Examples: "1", "2", "12". NEVER include unit suffix (개, 단, 박스, etc.). "" if not visible.
 - metadata: EVERYTHING that is not a product — store name, address, phone, datetime, POS/cashier IDs, card info, totals, tax (면세/과세/부가세), payment, **barcodes (any digit-only string of length 8+)**, headers like "상품명/단가/수량", footer messages, etc. If unsure whether a line is a product, put it in metadata. metadata MUST be a non-empty list for receipts (every Korean receipt has store info / dates / totals — never return empty).
 - Concrete anti-pattern: a line like "8801005638654" or "8807500007063" → metadata, NEVER items. If a barcode appears between products, attach it to metadata, do not create a separate item for it.
@@ -106,15 +124,27 @@ _PROMPT = """You receive a single image. Classify and extract structured info as
 
 [Branch 2] Real-world PHOTO of food/ingredients/products:
 - kind = "object"
-- items: each visible food/ingredient → {category, name (Korean), quantity}
+- items: each visible food/ingredient → {category, name (Korean), quantity, coefficient}
 - quantity: digits only as string counted from the image. Examples: "1", "2", "5". NEVER include unit suffix (개, 단, 박스, etc.). "" only when truly uncountable.
 - Skip non-food items entirely (do not list household goods, utensils, packaging)
 - metadata = [] (empty list for object branch — sink not needed)
 - name 가능한 한국어 단일 식재료명 (사과, 양파, 브로콜리, 방울토마토 등). 카탈로그 사진처럼 종류가 섞여있으면 종류별로 한 줄씩.
 
+[Shelf-life coefficient] (applies to BOTH branches, every item)
+- coefficient: a multiplier on the category's STANDARD storage days. 1.0 = typical for that category.
+  * > 1 for items that keep noticeably LONGER than the category norm:
+      통조림/캔/병조림 3~5, 냉동·장기보관 1.5~3, 말린/건조식품(육포·건어물·말린나물) 2~4,
+      장류·절임·잼·꿀 2~4, 라면·파스타 등 건면 1.5~2.
+  * < 1 for items that spoil FASTER than the category norm:
+      생선회/회 0.3, 다진고기·간고기 0.5, 손질채소·새싹·샐러드믹스 0.5, 두부 개봉 0.6,
+      갓 만든 반찬·조리식품 0.5, 생크림·연두부 0.6.
+  * If nothing special, use 1.0. Range 0.1~10.
+- BE CONSISTENT: the same item name must always get the same coefficient.
+
 [Strict rules]
 - Korean text verbatim (after typo correction for receipts), no translation
 - quantity = "" (empty string) when not visible/applicable
+- coefficient: always include a number (default 1.0). Never omit.
 - Output JSON only, no commentary
 """
 
@@ -131,6 +161,9 @@ async def call_gemini(image_bytes: bytes, mime_type: str = "image/jpeg") -> OcrR
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
             response_schema=OcrResponse,
+            # 저온 추론: 분류·품명·수량·계수가 호출마다 흔들리지 않도록 결정성을 높인다.
+            # 특히 유통기한 계수(coefficient)의 일관성 확보 목적. (docs/expiry-spec-v1.md §4.1)
+            temperature=0.0,
         ),
     )
     parsed = response.parsed
