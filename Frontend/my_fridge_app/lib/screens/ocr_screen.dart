@@ -31,6 +31,7 @@ class _OcrScreenState extends State<OcrScreen> {
   RegisterMode mode = RegisterMode.none;
   bool hasScanned = false;
   bool isAnalyzing = false;
+  bool isRegistering = false;
   bool showCompleteMessage = false;
   String? ocrError;
   String analyzingStage = '이미지를 분석하고 있어요…';
@@ -241,6 +242,8 @@ class _OcrScreenState extends State<OcrScreen> {
   }
 
   Future<void> registerIngredient() async {
+    // 중복 탭/연타 가드: 이미 등록 중이면 무시
+    if (isRegistering) return;
     if (AuthService.currentUser == null) return;
     final itemsToSave = draftItems
         .where((item) => item.name.trim().isNotEmpty)
@@ -253,22 +256,31 @@ class _OcrScreenState extends State<OcrScreen> {
       return;
     }
 
-    final String source = mode == RegisterMode.receipt 
-        ? IngredientSource.receipt 
+    setState(() => isRegistering = true);
+
+    final String source = mode == RegisterMode.receipt
+        ? IngredientSource.receipt
         : IngredientSource.image;
 
-    for (final item in itemsToSave) {
-      await IngredientService.addIngredient(
-        name: item.name.trim(),
-        category: item.category,
-        emoji: emojiForCategory(item.category),
-        count: item.count,
-        expireDate: item.expireDate,
-        imageLocalPath: pickedImage?.path,
-        addedVia: source,
-      );
+    try {
+      for (final item in itemsToSave) {
+        await IngredientService.addIngredient(
+          name: item.name.trim(),
+          category: item.category,
+          emoji: emojiForCategory(item.category),
+          count: item.count,
+          expireDate: item.expireDate,
+          imageLocalPath: pickedImage?.path,
+          addedVia: source,
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => isRegistering = false);
+      }
     }
 
+    if (!mounted) return;
     setState(() {
       showCompleteMessage = true;
     });
@@ -964,19 +976,29 @@ class _OcrScreenState extends State<OcrScreen> {
 
   Widget registerButton() {
     return GestureDetector(
-      onTap: registerIngredient,
+      onTap: isRegistering ? null : registerIngredient,
       child: Container(
         width: double.infinity,
         height: 52,
         decoration: BoxDecoration(
-          color: AppColors.mainGreen,
+          color: isRegistering ? Colors.grey : AppColors.mainGreen,
           borderRadius: BorderRadius.circular(14),
         ),
-        child: const Center(
-          child: Text(
-            '식재료 등록하기',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-          ),
+        child: Center(
+          child: isRegistering
+              ? const SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+              : const Text(
+                  '식재료 등록하기',
+                  style: TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold),
+                ),
         ),
       ),
     );
@@ -984,19 +1006,29 @@ class _OcrScreenState extends State<OcrScreen> {
 
   Widget registerManualButton() {
     return GestureDetector(
-      onTap: registerManualIngredient,
+      onTap: isRegistering ? null : registerManualIngredient,
       child: Container(
         width: double.infinity,
         height: 52,
         decoration: BoxDecoration(
-          color: AppColors.mainGreen,
+          color: isRegistering ? Colors.grey : AppColors.mainGreen,
           borderRadius: BorderRadius.circular(14),
         ),
-        child: const Center(
-          child: Text(
-            '직접 등록하기',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-          ),
+        child: Center(
+          child: isRegistering
+              ? const SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+              : const Text(
+                  '직접 등록하기',
+                  style: TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold),
+                ),
         ),
       ),
     );
