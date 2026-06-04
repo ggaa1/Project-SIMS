@@ -81,6 +81,7 @@ class ApiClient {
 
   /// multipart/form-data 업로드. body는 파일 스트림과 함께 직접 작성.
   /// OCR처럼 큰 페이로드는 별도 헬퍼 대신 이 메서드로 처리.
+  /// [onStage]가 주어지면 _request와 동일한 단계 안내를 호출.
   static Future<String> postMultipart(
     String path, {
     required Stream<List<int>> fileStream,
@@ -88,40 +89,56 @@ class ApiClient {
     required String mimeType,
     String fieldName = 'file',
     Duration timeout = const Duration(seconds: 60),
+    void Function(String stage)? onStage,
     bool requireAuth = true,
   }) async {
-    final token = requireAuth ? await _idToken() : null;
-    if (requireAuth && token == null) {
-      throw StateError('Firebase 로그인 토큰을 가져오지 못했습니다.');
+    Timer? t1, t2, t3;
+    if (onStage != null) {
+      t1 = Timer(const Duration(seconds: 3), () => onStage('잠시만요…'));
+      t2 = Timer(const Duration(seconds: 8),
+          () => onStage('서버를 깨우는 중이에요 (최대 1분)'));
+      t3 = Timer(const Duration(seconds: 25),
+          () => onStage('이미지 분석 중…'));
     }
-    final boundary = '----sims-${DateTime.now().microsecondsSinceEpoch}';
 
-    final request = await _client
-        .postUrl(Uri.parse('$baseUrl$path'))
-        .timeout(timeout);
-    if (token != null) {
-      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+    try {
+      final token = requireAuth ? await _idToken() : null;
+      if (requireAuth && token == null) {
+        throw StateError('Firebase 로그인 토큰을 가져오지 못했습니다.');
+      }
+      final boundary = '----sims-${DateTime.now().microsecondsSinceEpoch}';
+
+      final request = await _client
+          .postUrl(Uri.parse('$baseUrl$path'))
+          .timeout(timeout);
+      if (token != null) {
+        request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+      }
+      request.headers.set(
+        HttpHeaders.contentTypeHeader,
+        'multipart/form-data; boundary=$boundary',
+      );
+
+      final safeFileName = fileName.replaceAll(RegExp(r'[^\x20-\x7E]'), '_');
+      request.add(utf8.encode('--$boundary\r\n'));
+      request.add(utf8.encode(
+        'Content-Disposition: form-data; name="$fieldName"; filename="$safeFileName"\r\n',
+      ));
+      request.add(utf8.encode('Content-Type: $mimeType\r\n\r\n'));
+      await request.addStream(fileStream);
+      request.add(utf8.encode('\r\n--$boundary--\r\n'));
+
+      final response = await request.close().timeout(timeout);
+      final responseBody = await response.transform(utf8.decoder).join();
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw HttpException('HTTP ${response.statusCode}: $responseBody');
+      }
+      return responseBody;
+    } finally {
+      t1?.cancel();
+      t2?.cancel();
+      t3?.cancel();
     }
-    request.headers.set(
-      HttpHeaders.contentTypeHeader,
-      'multipart/form-data; boundary=$boundary',
-    );
-
-    final safeFileName = fileName.replaceAll(RegExp(r'[^\x20-\x7E]'), '_');
-    request.add(utf8.encode('--$boundary\r\n'));
-    request.add(utf8.encode(
-      'Content-Disposition: form-data; name="$fieldName"; filename="$safeFileName"\r\n',
-    ));
-    request.add(utf8.encode('Content-Type: $mimeType\r\n\r\n'));
-    await request.addStream(fileStream);
-    request.add(utf8.encode('\r\n--$boundary--\r\n'));
-
-    final response = await request.close().timeout(timeout);
-    final responseBody = await response.transform(utf8.decoder).join();
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw HttpException('HTTP ${response.statusCode}: $responseBody');
-    }
-    return responseBody;
   }
 
   static Future<String> _request({

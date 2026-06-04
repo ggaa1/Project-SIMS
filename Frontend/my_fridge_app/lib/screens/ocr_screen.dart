@@ -24,17 +24,22 @@ class _OcrScreenState extends State<OcrScreen> {
   final _nameController = TextEditingController();
   final _countController = TextEditingController(text: '1');
   final _expireDateController = TextEditingController();
-  
+
   // 기본 카테고리
-  String _selectedCategory = IngredientCategory.vegetable; 
-  
+  String _selectedCategory = IngredientCategory.vegetable;
+
   RegisterMode mode = RegisterMode.none;
   bool hasScanned = false;
   bool isAnalyzing = false;
   bool showCompleteMessage = false;
   String? ocrError;
+  String analyzingStage = '이미지를 분석하고 있어요…';
   XFile? pickedImage;
   List<OcrDraftItem> draftItems = [];
+
+  // 카메라/앨범 원본은 종종 5~15MB. 백엔드 한도 10MB + Gemini 처리 속도 위해 사전 압축.
+  static const int _pickMaxWidth = 1920;
+  static const int _pickImageQuality = 85;
 
   // 카테고리 목록
   static const List<String> _categories = IngredientCategory.all;
@@ -49,7 +54,12 @@ class _OcrScreenState extends State<OcrScreen> {
 
   Future<void> pickImage(RegisterMode selectedMode, ImageSource source) async {
     final picker = ImagePicker();
-    final image = await picker.pickImage(source: source);
+    final image = await picker.pickImage(
+      source: source,
+      // 업로드 페이로드를 1~2MB 수준으로 줄여 백엔드 10MB 한도 + 분석 속도 개선
+      maxWidth: _pickMaxWidth.toDouble(),
+      imageQuality: _pickImageQuality,
+    );
 
     if (image == null) return;
 
@@ -58,6 +68,7 @@ class _OcrScreenState extends State<OcrScreen> {
       pickedImage = image;
       hasScanned = true;
       isAnalyzing = true;
+      analyzingStage = '이미지를 분석하고 있어요…';
       draftItems = [];
       ocrError = null;
       showCompleteMessage = false;
@@ -68,28 +79,46 @@ class _OcrScreenState extends State<OcrScreen> {
 
   Future<void> analyzePickedImage(String imagePath) async {
     try {
-      final result = await OcrService.analyzeImage(imagePath);
+      final result = await OcrService.analyzeImage(
+        imagePath,
+        onStage: (stage) {
+          if (!mounted) return;
+          setState(() => analyzingStage = stage);
+        },
+      );
 
       if (!mounted) return;
 
       setState(() {
         draftItems = result.items;
         isAnalyzing = false;
-        ocrError = draftItems.isEmpty ? '인식된 식재료가 없습니다. 다시 선택해주세요.' : null;
+        ocrError = draftItems.isEmpty
+            ? '인식된 식재료가 없어요. 더 선명한 사진으로 다시 시도해보세요.'
+            : null;
+      });
+    } on OcrException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        isAnalyzing = false;
+        ocrError = e.message;
       });
     } catch (_) {
       if (!mounted) return;
 
       setState(() {
         isAnalyzing = false;
-        ocrError = '이미지 분석에 실패했습니다. 다시 시도해주세요.';
+        ocrError = '이미지 분석에 실패했어요. 잠시 후 다시 시도해주세요.';
       });
     }
   }
 
   Future<void> pickManualImage() async {
     final picker = ImagePicker();
-    final image = await picker.pickImage(source: ImageSource.gallery);
+    final image = await picker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: _pickMaxWidth.toDouble(),
+      imageQuality: _pickImageQuality,
+    );
 
     if (image == null) return;
 
@@ -280,11 +309,18 @@ class _OcrScreenState extends State<OcrScreen> {
 
   Widget getResultText() {
     if (isAnalyzing) {
-      return const Column(
+      return Column(
         children: [
-          CircularProgressIndicator(),
-          SizedBox(height: 12),
-          Text('이미지를 분석하고 있습니다.', style: TextStyle(color: AppColors.textSub)),
+          const CircularProgressIndicator(),
+          const SizedBox(height: 12),
+          Text(
+            analyzingStage,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: AppColors.textSub,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
         ],
       );
     }
@@ -293,7 +329,10 @@ class _OcrScreenState extends State<OcrScreen> {
       return Text(
         ocrError!,
         textAlign: TextAlign.center,
-        style: const TextStyle(color: AppColors.warningRed),
+        style: const TextStyle(
+          color: AppColors.warningRed,
+          fontWeight: FontWeight.w600,
+        ),
       );
     }
 
@@ -612,9 +651,12 @@ class _OcrScreenState extends State<OcrScreen> {
 
   Widget scannedResultView() {
     return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(vertical: 18),
-      child: Container(
-        width: 310,
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+      child: ConstrainedBox(
+        // 작은 폰(360dp)에선 가용 폭 전체 사용, 태블릿/큰 폰에선 최대 420dp로 제한
+        constraints: const BoxConstraints(maxWidth: 420),
+        child: Container(
+        width: double.infinity,
         padding: const EdgeInsets.all(18),
         decoration: BoxDecoration(
           color: Colors.white,
@@ -658,6 +700,7 @@ class _OcrScreenState extends State<OcrScreen> {
               ),
           ],
         ),
+      ),
       ),
     );
   }

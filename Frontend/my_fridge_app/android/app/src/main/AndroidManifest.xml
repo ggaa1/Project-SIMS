@@ -1,4 +1,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 백엔드 호출용 (release 빌드에서 필수, debug에는 별도 manifest에 이미 있음) -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+
+    <!-- 카메라 촬영(영수증/식재료 사진) -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <uses-feature android:name="android.hardware.camera" android:required="false"/>
+
     <!-- FCM/로컬 알림용 권한 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.VIBRATE"/>
@@ -6,7 +13,7 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 
     <application
-        android:label="my_fridge_app"
+        android:label="냉장고를 부탁해"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
