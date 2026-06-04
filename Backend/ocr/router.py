@@ -39,7 +39,8 @@ class OcrTextResponse(BaseModel):
     )
     items: list[Item] = Field(
         description=(
-            "추출된 식재료/품목 목록. 양쪽 분기 모두 동일 스키마 — {category, name, quantity}. "
+            "추출된 식재료/품목 목록. 양쪽 분기 모두 동일 스키마 — {category, name, quantity, coefficient}. "
+            "coefficient 는 유통기한 계수(기본 1.0) — server 가 expireDate 산정에 사용. "
             "frontend 는 사용자에게 이 리스트를 보여주고 수정/확정받는 UX 권장."
         ),
     )
@@ -52,9 +53,9 @@ class OcrTextResponse(BaseModel):
 _RESPONSE_EXAMPLE_RECEIPT = {
     "source_kind": "receipt",
     "items": [
-        {"category": "육류", "name": "한우 앞다리", "quantity": "1"},
-        {"category": "야채", "name": "새송이버섯", "quantity": "1"},
-        {"category": "음료", "name": "칠성사이다 패트 500ml", "quantity": "1"},
+        {"category": "육류", "name": "한우 앞다리", "quantity": "1", "coefficient": 0.8},
+        {"category": "야채", "name": "새송이버섯", "quantity": "1", "coefficient": 1.0},
+        {"category": "음료", "name": "칠성사이다 패트 500ml", "quantity": "1", "coefficient": 1.5},
     ],
     "model": "gemini-3.1-flash-lite",
 }
@@ -62,9 +63,9 @@ _RESPONSE_EXAMPLE_RECEIPT = {
 _RESPONSE_EXAMPLE_OBJECT = {
     "source_kind": "object",
     "items": [
-        {"category": "과일", "name": "바나나", "quantity": "2"},
-        {"category": "과일", "name": "사과", "quantity": "1"},
-        {"category": "야채", "name": "파프리카", "quantity": "3"},
+        {"category": "과일", "name": "바나나", "quantity": "2", "coefficient": 1.0},
+        {"category": "과일", "name": "사과", "quantity": "1", "coefficient": 1.2},
+        {"category": "야채", "name": "파프리카", "quantity": "3", "coefficient": 1.0},
     ],
     "model": "gemini-3.1-flash-lite",
 }

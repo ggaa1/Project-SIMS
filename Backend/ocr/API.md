@@ -25,6 +25,7 @@ Content-Type: multipart/form-data
 | 필드 | 타입 | 필수 | 설명 |
 |---|---|---|---|
 | `file` | file | ✓ | 처리할 이미지 |
+| `fridge_id` | string | — | (server 통합 버전) 대상 냉장고 ID. 주면 해당 냉장고의 override 보관일수를 만료일 산정에 반영. 없으면 전역 기본값 사용. standalone(`Backend/ocr`) 버전은 무시. |
 
 ### 허용 content-type
 `image/jpeg`, `image/jpg`, `image/png`, `image/webp`, `image/heic`, `image/heif`
@@ -62,7 +63,8 @@ Content-Type: multipart/form-data
 | `category` | enum (12종) | 카테고리. 유통기한 매핑용 proxy. 아래 enum 참조. |
 | `name` | string | 한국어 품명. OCR 원문 + 컨텍스트 보정. |
 | `quantity` | string | 수량. **digits-only** ("1", "2", "12") 또는 빈 문자열. 단위 suffix 없음. |
-| `coefficient` | float | **유통기한 계수.** 카테고리 표준 보관일수에 곱해 만료일을 미세조정(`expireDate = today + round(표준일수 × coefficient)`). 표준보다 오래가는 품목(냉동만두·통조림)은 > 1, 빨리 상하는 품목(생선회)은 < 1, 기본 1.0. 권장 범위 `0.1~10`(server에서 범위 밖은 클램프). 일관성을 위해 **저온(temperature↓) 추론**. server가 만료일 산정 후 폐기하며 DB에 저장하지 않음. 상세: `docs/expiry-spec-v1.md` §4.1 |
+| `coefficient` | float | **유통기한 계수.** 카테고리 표준 보관일수에 곱해 만료일을 미세조정. 표준보다 오래가는 품목(냉동만두·통조림)은 > 1, 빨리 상하는 품목(생선회)은 < 1, 기본 1.0. 권장 범위 `0.1~10`(server에서 범위 밖은 클램프). 일관성을 위해 **저온(temperature↓) 추론**. 상세: `docs/expiry-spec-v1.md` §4.1 |
+| `expire_date` | datetime | **(server 통합 버전 전용)** server 가 `KST_today + round(effective(category) × coefficient)` 로 산정한 **추천 만료일**(UTC ISO). 프론트는 이 값을 사용자 확인 화면에 표시하고, 수정 후 Firestore 에 직접 저장. standalone 버전 응답엔 없음. |
 
 ### `category` enum
 ```

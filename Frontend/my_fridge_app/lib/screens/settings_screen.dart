@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
 import '../services/notification_settings_service.dart';
 import '../theme/app_colors.dart';
+import 'category_shelf_life_screen.dart';
 import 'login_screen.dart';
 import 'share_fridge_screen.dart';
 
@@ -123,6 +124,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 child: const Center(
                   child: Text(
                     '냉장고 공유',
+                    style: TextStyle(
+                      color: AppColors.mainGreen,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            GestureDetector(
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const CategoryShelfLifeScreen(),
+                  ),
+                );
+              },
+              child: Container(
+                width: double.infinity,
+                height: 52,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: AppColors.mainGreen),
+                ),
+                child: const Center(
+                  child: Text(
+                    '카테고리별 유통기한 설정',
                     style: TextStyle(
                       color: AppColors.mainGreen,
                       fontWeight: FontWeight.bold,

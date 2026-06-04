@@ -5,6 +5,7 @@ import 'package:image_picker/image_picker.dart';
 import '../models/ingredient.dart';
 import '../models/ocr_result.dart';
 import '../services/auth_service.dart';
+import '../services/category_shelf_life_service.dart';
 import '../services/ingredient_service.dart';
 import '../services/ocr_service.dart';
 import '../theme/app_colors.dart';
@@ -35,6 +36,9 @@ class _OcrScreenState extends State<OcrScreen> {
   String? ocrError;
   XFile? pickedImage;
   List<OcrDraftItem> draftItems = [];
+
+  // 수동 추가용: 카테고리 → effective 보관일수 (자동입력 기준). 비어있으면 자동입력 생략.
+  Map<String, int> _categoryDays = {};
 
   // 카테고리 목록
   static const List<String> _categories = IngredientCategory.all;
@@ -150,7 +154,7 @@ class _OcrScreenState extends State<OcrScreen> {
     });
   }
 
-  void openManualForm() {
+  Future<void> openManualForm() async {
     setState(() {
       mode = RegisterMode.manual;
       pickedImage = null;
@@ -160,6 +164,28 @@ class _OcrScreenState extends State<OcrScreen> {
       ocrError = null;
       showCompleteMessage = false;
     });
+
+    // 카테고리별 기본 보관일수를 받아 선택 카테고리의 유통기한을 자동 입력.
+    // 실패해도 수동 입력은 그대로 진행(사용자가 직접 날짜 선택).
+    try {
+      final fridgeId = await IngredientService.currentFridgeId();
+      final map = await CategoryShelfLifeService.effectiveDaysMap(fridgeId);
+      if (!mounted) return;
+      setState(() => _categoryDays = map);
+      _autofillExpireForCategory(_selectedCategory);
+    } catch (_) {
+      // 무시 — 자동입력만 생략
+    }
+  }
+
+  /// 선택된 카테고리의 effective 보관일수로 유통기한 필드를 채운다(사용자 수정 가능).
+  void _autofillExpireForCategory(String category) {
+    final days = _categoryDays[category];
+    if (days == null) return;
+    final d = DateTime.now().add(Duration(days: days));
+    _expireDateController.text = '${d.year.toString().padLeft(4, '0')}-'
+        '${d.month.toString().padLeft(2, '0')}-'
+        '${d.day.toString().padLeft(2, '0')}';
   }
 
   String emojiForCategory(String category) {
@@ -708,6 +734,7 @@ class _OcrScreenState extends State<OcrScreen> {
                   setState(() {
                     _selectedCategory = value;
                   });
+                  _autofillExpireForCategory(value);
                 },
               ),
               const SizedBox(height: 14),

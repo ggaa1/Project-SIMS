@@ -117,13 +117,15 @@ effective(category) = fridge.categoryShelfLife[category]   // 냉장고가 덮�
 
 ## 4. `expireDate` 자동 계산 흐름
 
-> **쓰기 경로 원칙:** 모든 영구 저장은 **백엔드 API 경유**로만 한다. 클라이언트가 Firestore에 식재료/override를
-> 직접 쓰는 것을 금지한다(§6). 만료일 계산도 server에서 수행한다(클라이언트·OCR 모듈이 아님).
+> **쓰기 경로 원칙 (v2.2 변경):** 식재료의 **최종 영구 저장은 프론트→Firestore 직접 쓰기**로 한다(현행 앱 구조 유지,
+> API 경유 강제 안 함). 다만 **만료일 산정(계산)은 server가 수행**한다 — OCR 응답 시점에 server가 추천 만료일을
+> 계산해 함께 돌려주고, 사용자가 확인 화면에서 수정한 뒤 프론트가 직접 저장한다. (§6 보안규칙의 API-only 강제는 보류)
 
-1. 식재료 생성 요청에 `expireDate`가 **명시되면 그 값을 그대로 사용**한다(사용자 입력/확정 우선).
-2. `expireDate`가 비어 있으면 server가:
-   - 해당 냉장고의 `categoryShelfLife` + 전역 `defaults`(+ 서버 상수)를 머지해 `effective(category)` 산출(§2.3).
-   - 품목 계수 `coefficient`(없으면 1.0)를 곱해 `expireDate = KST_today + round(effective(category) × coefficient)일`, `[1, 3650]` 클램프.
+1. **OCR 경로:** server의 `/ocr/text` 가 품목별로 `expireDate`(추천)를 계산해 응답에 실어 보낸다.
+   - `expireDate = KST_today + round(effective(category) × coefficient)일`, `[1, 3650]` 클램프.
+   - `effective(category)`: 요청의 `fridge_id` 로 냉장고 override + 전역 `defaults`(+ 서버 상수)를 머지(§2.3).
+   - 사용자가 확인 화면에서 날짜를 수정(또는 그대로 수락) → 프론트가 Firestore에 직접 저장.
+2. **수동/직접 생성:** 프론트가 `expireDate`를 직접 정해 Firestore에 저장한다(§4.2). 서버 API 경유 생성 경로는 두지 않는다.
 3. **이미 추가된 식재료에는 소급 적용하지 않는다** — 설정 변경은 *다음 추가분*부터 반영.
    - 클라이언트는 설정 변경 화면에서 "다음에 추가하는 식재료부터 적용됩니다" 류의 간단한 안내를 노출한다(백엔드는 소급 처리 없음).
 
@@ -134,9 +136,9 @@ effective(category) = fridge.categoryShelfLife[category]   // 냉장고가 덮�
 
 - **산출 주체: Gemini OCR.** 영수증/이미지 인식 시 Gemini가 품목마다 `coefficient`를 함께 추론해 반환한다(OCR 응답 스키마 `Item`에 `coefficient` 필드 포함 — `Backend/ocr/API.md` 참조). 표준보다 오래가는 품목(냉동만두, 통조림)은 > 1, 빨리 상하는 품목(생선회)은 < 1.
 - **일관성: 저온 추론.** 계수 추론 시 LLM `temperature`를 낮게 설정해 동일 입력에 가급적 일정한 계수가 나오도록 한다(완전 결정적은 아님 → 아래 검증 가드 유지).
-- **소비·폐기: server에서 1회 사용 후 버린다.** server가 ingest/create 경로에서 `coefficient`로 `expireDate`를 계산한 뒤, **계수 자체는 식재료 문서에 저장하지 않는다**(저장되는 건 결과 `expireDate`뿐). 소급 적용을 하지 않으므로 재계산용으로 보관할 필요가 없다.
+- **소비·폐기: server가 OCR 응답 시점에 1회 사용 후 버린다.** server `/ocr/text` 가 `coefficient`로 추천 `expireDate`를 계산해 응답에 실어 보낸 뒤, **계수 자체는 어디에도 저장하지 않는다**(최종 저장되는 건 사용자가 확정한 `expireDate`뿐). 소급 적용을 하지 않으므로 재계산용으로 보관할 필요가 없다.
 - **검증 가드(클램프):** 계수가 `0.1 ≤ coefficient ≤ 10` 범위를 벗어나면 해당 경계로 클램프하고, 비정상값(음수/0/null/비숫자)·누락은 1.0으로 본다. **계수 때문에 요청을 거부(400)하지 않는다.** 최종 일수는 §1대로 `[1, 3650]` 클램프.
-- **사용자 보정: 최종 유통기한(날짜)을 직접 수정.** 사용자는 OCR 결과 확인 화면에서 계수가 아니라 **계산된 유통기한 날짜 자체**를 고쳐 저장한다. 수정된 날짜는 위 1번(명시된 `expireDate`)으로 취급해 그대로 저장한다. (계수는 노출/편집 대상이 아님)
+- **사용자 보정: 최종 유통기한(날짜)을 직접 수정.** 사용자는 OCR 결과 확인 화면에서 계수가 아니라 server가 돌려준 **추천 유통기한 날짜 자체**를 고쳐 저장한다. (계수는 노출/편집 대상이 아님)
 - 별도 품목명→계수 매핑 테이블은 두지 않는다(미채택).
 
 ### 4.2 수동 추가 경로
@@ -181,8 +183,10 @@ Content-Type: application/json
 
 ## 6. Security Rules 방향성
 
-> **원칙(§4):** 식재료·override의 영구 쓰기는 **백엔드 API(Admin SDK) 경유만** 허용한다. Admin SDK는
-> Security Rules를 우회하므로, 아래 규칙은 *클라이언트 직접 쓰기*를 막는 데 초점을 둔다.
+> **⚠️ v2.2 상태: 보류(deferred).** 현행 앱이 Firestore에 직접 쓰기를 하므로(§4 v2.2), 아래 "API-only 강제"
+> 규칙을 그대로 배포하면 앱이 깨진다. 따라서 이 규칙은 **목표 골격**으로만 두고 미배포 상태다
+> (`Backend/firestore.rules` 제안 파일, `firebase.json` 미연결). 전체 앱 컬렉션 규칙 통합 + (선택적)
+> override 쓰기의 서버 전환이 끝난 뒤 적용한다.
 
 ```
 // 전역 기본값: 인증 사용자 읽기, 쓰기는 서버(Admin SDK)만
@@ -236,8 +240,8 @@ match /fridges/{fridgeId} {
 | **전역 기본값 저장 위치** | **Firestore `appConfig/categoryShelfLife` 문서**(§2.1 원안). 운영자가 무배포로 수정, 클라이언트 읽기전용. |
 | **개별 카테고리 기본값 복원 UX** | **프론트엔드 책임.** override 값의 삭제/변경 UI·로직은 프론트에서 처리. 백엔드는 PATCH로 받은 값 저장/제거(`null` 키 제거)만 수행(§5.2). |
 | **소급 미적용 안내** | **클라이언트단 처리.** 백엔드는 소급 적용 없음(§4-3 유지), 프론트가 안내 노출. |
-| **쓰기 경로** | **백엔드 API 경유만.** 클라이언트의 Firestore 직접 쓰기 차단(§6 Security Rules로 `categoryShelfLife` 직접 수정 봉쇄). |
-| **계수 계산 주체** | **서버.** OCR은 `coefficient`만 반환, server의 ingest/create 경로에서 `expireDate` 산정 후 계수는 폐기(저장 안 함). §4.1. |
+| **쓰기 경로 (v2.2 변경)** | **최종 저장은 프론트→Firestore 직접 쓰기**(현행 앱 유지, API 경유 강제 안 함). §6 보안규칙의 API-only 강제는 보류. |
+| **계수 계산 주체 (v2.2 변경)** | **서버가 OCR 응답 시점에 계산.** server `/ocr/text` 가 `fridge_id`로 override 반영해 추천 `expireDate`를 계산·반환, 계수는 폐기(저장 안 함). 최종 저장은 사용자 수정 후 프론트 직접 쓰기. §4. |
 | **계수 검증** | **클램프 통일.** `0.1~10` 밖은 경계로 클램프, 비정상·누락은 1.0, 계수로 인한 400 없음. 최종 일수만 `[1,3650]` 클램프. §7. |
 | **폴백 계층** | 전역 기본값 12종 결손 금지 / 냉장고 override는 sparse 결손 허용(전역이 받침) / 서버 하드코딩 상수는 최후 방어선. §2.3. |
 | **수동 추가** | 프론트에서 카테고리 선택 시 effective 값 자동 입력·수정 가능. 개별 수정이 카테고리 override 설정값을 바꾸지 않음. §4.2. |
@@ -250,6 +254,12 @@ match /fridges/{fridgeId} {
 - Gemini 계수 추론 정확도 모니터링 및 프롬프트 보정(저온 추론 고정).
 
 ## 10. 변경 이력 (Changelog)
+
+### v2.2 (2026-06-04) — 구현 착수 중 결정 반영
+- **쓰기 경로 반전:** 최종 영구 저장을 **프론트→Firestore 직접 쓰기**로 확정(현행 앱 구조 유지). API-only 강제 철회(§4, §9).
+- **계산 시점 이동:** 만료일 산정을 **server `/ocr/text` 응답 시점**으로 이동 — OCR이 추천 `expireDate`를 계산해 반환, 사용자 확인 화면에서 수정 후 직접 저장. OCR 요청에 `fridge_id`(override 반영용) 추가, 응답 item에 `expire_date` 추가(`API.md` 동시 개정).
+- **Security Rules 보류:** 직접 쓰기 구조와 충돌하므로 §6 규칙은 미배포 제안(`Backend/firestore.rules`)으로만 유지.
+- 구현 반영: `app/services/shelf_life.py`(계산 코어·시드), `app/ocr/router.py`(OCR 산정), `app/routers/fridges.py`(category-shelf-life API), `app/ocr/gemini.py`(계수·저온), 프론트 `ocr_result.dart`/`ocr_service.dart`/`api_client.dart`(계수·날짜·fridge_id 배선).
 
 ### v2.1 (2026-06-04)
 - **쓰기 경로**를 백엔드 API 경유로 일원화(§4 원칙), §6 Security Rules를 create/update 분리 + `categoryShelfLife` 클라 직접 수정 봉쇄로 개정(v1 규칙의 create 시 `resource==null` 결함 수정).
